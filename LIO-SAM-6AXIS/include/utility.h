@@ -324,6 +324,11 @@ public:
         // rotate gyroscope
         Eigen::Vector3d gyr(imu_in.angular_velocity.x, imu_in.angular_velocity.y, imu_in.angular_velocity.z);
         gyr = extRot * gyr;
+        // 当设备给的角速度为度每秒时，将其转换为弧度每秒
+        // imu_out.angular_velocity.x = gyr.x()  * (M_PI / 180);
+        // imu_out.angular_velocity.y = gyr.y()  * (M_PI / 180);
+        // imu_out.angular_velocity.z = gyr.z()  * (M_PI / 180);
+
         imu_out.angular_velocity.x = gyr.x();
         imu_out.angular_velocity.y = gyr.y();
         imu_out.angular_velocity.z = gyr.z();

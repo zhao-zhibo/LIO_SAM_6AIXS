@@ -376,8 +376,14 @@ public:
                 }
             }
             if (ringFlag == -1) {
-                ROS_ERROR("Point cloud ring channel not available, please configure your point cloud data!");
-                ros::shutdown();
+                if (sensor == SensorType::VELODYNE) {
+                    ringFlag = 2;
+                } else {
+                    ROS_ERROR("Point cloud ring channel not available, please configure your point cloud data!");
+                    ros::shutdown();
+                }
+                // ROS_ERROR("Point cloud ring channel not available, please configure your point cloud data!");
+                // ros::shutdown();
             }
         }
 

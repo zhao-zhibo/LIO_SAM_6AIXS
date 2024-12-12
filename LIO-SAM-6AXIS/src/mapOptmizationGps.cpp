@@ -92,7 +92,7 @@ public:
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
-    vector<pcl::PointCloud<PointType>::Ptr> laserCloudRawKeyFrames;
+    vector<pcl::PointCloud<PointType>::Ptr> laserCloudRawKeyFrames; // 原始的经过去畸变的点云，但是还在雷达坐标系中
 
     std::vector<Eigen::Matrix4d> keyframePosestrans;
     std::vector<nav_msgs::Odometry> keyframeRawOdom;
@@ -627,8 +627,8 @@ public:
             *globalSurfCloud += *transformPointCloud(surfCloudKeyFrames[i],
                                                      &cloudKeyPoses6D->points[i]);
             /** if you want to save the origin deskewed point cloud, but not only feature map*/
-//            *globalRawCloud += *transformPointCloud(laserCloudRawKeyFrames[i],
-//                                                    &cloudKeyPoses6D->points[i]);
+           *globalRawCloud += *transformPointCloud(laserCloudRawKeyFrames[i],
+                                                   &cloudKeyPoses6D->points[i]);
             cout << "\r" << std::flush << "Processing feature cloud " << i << " of "
                  << cloudKeyPoses6D->size() << " ..." << std::endl;
         }
@@ -644,12 +644,14 @@ public:
         // save global point cloud map
         *globalMapCloud += *globalCornerCloudDS;
         *globalMapCloud += *globalSurfCloudDS;
-        // *globalMapCloud += *globalRawCloud;
 
-//        downSizeFilterSurf.setInputCloud(globalRawCloud);
-//        downSizeFilterSurf.setLeafSize(globalMapLeafSize, globalMapLeafSize,
-//                                       globalMapLeafSize);
-//        downSizeFilterSurf.filter(*globalRawCloudDS);
+        // 保存原始点云，但是点云转换到了全局坐标系中
+        *globalMapCloud += *globalRawCloud;
+
+       downSizeFilterSurf.setInputCloud(globalRawCloud);
+       downSizeFilterSurf.setLeafSize(globalMapLeafSize, globalMapLeafSize,
+                                      globalMapLeafSize);
+       downSizeFilterSurf.filter(*globalRawCloudDS);
 
         /** if you need to downsample the final map, 0.5m is ok*/
         downSizeFilterSurf.setInputCloud(globalMapCloud);
@@ -2103,7 +2105,7 @@ public:
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
         // if you want to save raw cloud
-//        laserCloudRawKeyFrames.push_back(thislaserCloudRawKeyFrame);
+        laserCloudRawKeyFrames.push_back(thislaserCloudRawKeyFrame); // 保存了原始点云，但是是当前帧的点云
         keyframeCloudDeskewed.push_back(cloudInfo.cloud_deskewed);
         keyframeTimes.push_back(timeLaserInfoStamp.toSec());
 
