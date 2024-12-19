@@ -1,0 +1,22 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "${default}",
+        "limitSymbolsToIncludedHeaders": false
+      },
+      "includePath": [
+        "/media/zhao/ZhaoZhibo1/Codes/competition_code/LIO_SAM_6AXIS_update/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/media/zhao/ZhaoZhibo1/Codes/competition_code/LIO_SAM_6AXIS_update/src/LIO-SAM-6AXIS/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS",
+      "intelliSenseMode": "gcc-x64",
+      "compilerPath": "/usr/bin/gcc",
+      "cStandard": "gnu11",
+      "cppStandard": "c++14"
+    }
+  ],
+  "version": 4
+}

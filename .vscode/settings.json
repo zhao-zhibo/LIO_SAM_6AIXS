@@ -1,0 +1,21 @@
+{
+    "python.autoComplete.extraPaths": [
+        "/media/zhao/ZhaoZhibo1/Codes/competition_code/LIO_SAM_6AXIS_update/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/media/zhao/ZhaoZhibo1/Codes/competition_code/LIO_SAM_6AXIS_update/devel/lib/python3/dist-packages",
+        "/opt/ros/noetic/lib/python3/dist-packages"
+    ],
+    "files.associations": {
+        "*.tcc": "cpp",
+        "deque": "cpp",
+        "list": "cpp",
+        "string": "cpp",
+        "vector": "cpp",
+        "system_error": "cpp",
+        "array": "cpp",
+        "core": "cpp",
+        "numericaldiff": "cpp"
+    }
+}

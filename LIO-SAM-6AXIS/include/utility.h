@@ -260,14 +260,14 @@ public:
         extQRPY = Eigen::Quaterniond(extRPY);
         //    std::cout << "qw:" << extQRPY << std::endl;
 
-        if (sensor == SensorType::HESAI) {
-            nh.param<vector<double >>("lio_sam_6axis/imuAccBias_N", imuAccBias_NV, vector<double>());
-            nh.param<vector<double >>("lio_sam_6axis/imuGyrBias_N", imuGyrBias_NV, vector<double>());
-            nh.param<vector<double >>("lio_sam_6axis/imuGravity_N", imuGravity_NV, vector<double>());
-            imuAccBias_N = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(imuAccBias_NV.data(), 3, 1);
-            imuGyrBias_N = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(imuGyrBias_NV.data(), 3, 1);
-            imuGravity_N = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(imuGravity_NV.data(), 3, 1);
-        }
+        // if (sensor == SensorType::HESAI) {
+        //     nh.param<vector<double >>("lio_sam_6axis/imuAccBias_N", imuAccBias_NV, vector<double>());
+        //     nh.param<vector<double >>("lio_sam_6axis/imuGyrBias_N", imuGyrBias_NV, vector<double>());
+        //     nh.param<vector<double >>("lio_sam_6axis/imuGravity_N", imuGravity_NV, vector<double>());
+        //     imuAccBias_N = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(imuAccBias_NV.data(), 3, 1);
+        //     imuGyrBias_N = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(imuGyrBias_NV.data(), 3, 1);
+        //     imuGravity_N = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(imuGravity_NV.data(), 3, 1);
+        // }
 
         q_sensor_body = Eigen::Quaterniond(extRPY);
         t_sensor_body = extTrans;
@@ -318,20 +318,20 @@ public:
         // rotate acceleration
         Eigen::Vector3d acc(imu_in.linear_acceleration.x, imu_in.linear_acceleration.y, imu_in.linear_acceleration.z);
         acc = extRot * acc;
-        imu_out.linear_acceleration.x = acc.x();
-        imu_out.linear_acceleration.y = acc.y();
-        imu_out.linear_acceleration.z = acc.z();
+        imu_out.linear_acceleration.x = acc.x() * imuGravity;
+        imu_out.linear_acceleration.y = acc.y() * imuGravity;
+        imu_out.linear_acceleration.z = acc.z() * imuGravity;
         // rotate gyroscope
         Eigen::Vector3d gyr(imu_in.angular_velocity.x, imu_in.angular_velocity.y, imu_in.angular_velocity.z);
         gyr = extRot * gyr;
         // 当设备给的角速度为度每秒时，将其转换为弧度每秒
-        // imu_out.angular_velocity.x = gyr.x()  * (M_PI / 180);
-        // imu_out.angular_velocity.y = gyr.y()  * (M_PI / 180);
-        // imu_out.angular_velocity.z = gyr.z()  * (M_PI / 180);
+        imu_out.angular_velocity.x = gyr.x()  * (M_PI / 180);
+        imu_out.angular_velocity.y = gyr.y()  * (M_PI / 180);
+        imu_out.angular_velocity.z = gyr.z()  * (M_PI / 180);
 
-        imu_out.angular_velocity.x = gyr.x();
-        imu_out.angular_velocity.y = gyr.y();
-        imu_out.angular_velocity.z = gyr.z();
+        // imu_out.angular_velocity.x = gyr.x();
+        // imu_out.angular_velocity.y = gyr.y();
+        // imu_out.angular_velocity.z = gyr.z();
         // rotate roll pitch yaw
         Eigen::Quaterniond q_from(imu_in.orientation.w, imu_in.orientation.x, imu_in.orientation.y,
                                   imu_in.orientation.z);
