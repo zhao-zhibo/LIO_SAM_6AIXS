@@ -98,7 +98,8 @@ public:
     bool debugLidarTimestamp;
     bool debugImu;
     bool debugGps;
-
+    bool imuAngularIsDegree;
+    bool imuAccelerIsG;
 
     // Save pcd
     bool savePCD;
@@ -210,6 +211,8 @@ public:
         nh.param<bool>("lio_sam_6axis/debugLidarTimestamp", debugLidarTimestamp, false);
         nh.param<bool>("lio_sam_6axis/debugImu", debugImu, false);
         nh.param<bool>("lio_sam_6axis/debugGps", debugGps, false);
+        nh.param<bool>("lio_sam_6axis/imuAngularIsDegree", imuAngularIsDegree, false);
+        nh.param<bool>("lio_sam_6axis/imuAccelerIsG", imuAccelerIsG, false);
 
         nh.param<bool>("lio_sam_6axis/savePCD", savePCD, false);
         nh.param<std::string>("lio_sam_6axis/savePCDDirectory", savePCDDirectory, "/Downloads/LOAM/");
@@ -318,20 +321,31 @@ public:
         // rotate acceleration
         Eigen::Vector3d acc(imu_in.linear_acceleration.x, imu_in.linear_acceleration.y, imu_in.linear_acceleration.z);
         acc = extRot * acc;
-        imu_out.linear_acceleration.x = acc.x() * imuGravity;
-        imu_out.linear_acceleration.y = acc.y() * imuGravity;
-        imu_out.linear_acceleration.z = acc.z() * imuGravity;
+
+        if(imuAccelerIsG) {
+            imu_out.linear_acceleration.x = acc.x() * imuGravity;
+            imu_out.linear_acceleration.y = acc.y() * imuGravity;
+            imu_out.linear_acceleration.z = acc.z() * imuGravity;
+        } else {
+            imu_out.linear_acceleration.x = acc.x();
+            imu_out.linear_acceleration.y = acc.y();
+            imu_out.linear_acceleration.z = acc.z();
+        }
+
         // rotate gyroscope
         Eigen::Vector3d gyr(imu_in.angular_velocity.x, imu_in.angular_velocity.y, imu_in.angular_velocity.z);
         gyr = extRot * gyr;
-        // 当设备给的角速度为度每秒时，将其转换为弧度每秒
-        imu_out.angular_velocity.x = gyr.x()  * (M_PI / 180);
-        imu_out.angular_velocity.y = gyr.y()  * (M_PI / 180);
-        imu_out.angular_velocity.z = gyr.z()  * (M_PI / 180);
 
-        // imu_out.angular_velocity.x = gyr.x();
-        // imu_out.angular_velocity.y = gyr.y();
-        // imu_out.angular_velocity.z = gyr.z();
+        if(!imuAngularIsDegree) {
+            imu_out.angular_velocity.x = gyr.x();
+            imu_out.angular_velocity.y = gyr.y();
+            imu_out.angular_velocity.z = gyr.z();
+        } else {
+            imu_out.angular_velocity.x = gyr.x() * (M_PI / 180);
+            imu_out.angular_velocity.y = gyr.y() * (M_PI / 180);
+            imu_out.angular_velocity.z = gyr.z() * (M_PI / 180);
+        }
+
         // rotate roll pitch yaw
         Eigen::Quaterniond q_from(imu_in.orientation.w, imu_in.orientation.x, imu_in.orientation.y,
                                   imu_in.orientation.z);
