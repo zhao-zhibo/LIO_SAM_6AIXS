@@ -53,7 +53,7 @@ lio_sam_6axis:
   # Extrinsics (lidar -> IMU)
   imu_type: 0   # 0: 6axis, 1:9 axis
   # lidar frame to imu frame
-  extrinsicTrans: [3.07608039e-01, 1.06832836e-02, 4.4059445e-01]
+  extrinsicTrans: [3.14093182e-01, 1.08047093e-02, 4.40600735e-01]
   # imu frame to lidar frame
   extrinsicRot: [7.243900153441823e-02,   9.973717785844793e-01, -1.458197493260785e-03,
                 -9.973126287117104e-01,   7.241848516641565e-02, -1.109430567180834e-02,
