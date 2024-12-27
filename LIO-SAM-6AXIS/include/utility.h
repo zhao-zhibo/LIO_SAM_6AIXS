@@ -146,8 +146,8 @@ public:
     Eigen::Vector3d t_body_sensor;
 
     // LOAM
-    float edgeThreshold;
-    float surfThreshold;
+    float edgeThreshold; // 边缘点曲率的阈值
+    float surfThreshold; //  面点曲率的阈值
     int edgeFeatureMinValidNum;
     int surfFeatureMinValidNum;
 

@@ -98,8 +98,8 @@ class FeatureExtraction : public ParamServer {
       cloudNeighborPicked[i] = 0;
       cloudLabel[i] = 0;
       // cloudSmoothness for sorting
-      cloudSmoothness[i].value = cloudCurvature[i];
-      cloudSmoothness[i].ind = i;
+      cloudSmoothness[i].value = cloudCurvature[i];  // 曲率的值
+      cloudSmoothness[i].ind = i; // 当前点云中的id
     }
   }
 
