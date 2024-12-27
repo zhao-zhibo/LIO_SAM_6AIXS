@@ -2,8 +2,6 @@ lio_sam_6axis:
 
   #  velodyne16 and stim300(6 axis)
 
-  # 数据在进入隧道600秒左右开始飘了，因此需要在进入隧道前后进行重定位
-
   # Topics
   pointCloudTopic: "/points_raw"               # Point cloud data
   imuTopic: "/imu_raw"                         # IMU data
@@ -36,7 +34,7 @@ lio_sam_6axis:
   savePCDDirectory: "/Downloads/LOAM/"        # actually we do not use the floder to save maps
 
   sensor: velodyne                            # lidar sensor type, 'velodyne' or 'ouster' or 'livox' or 'hesai'
-  N_SCAN: 32                                  # number of lidar channel (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
+  N_SCAN: 16                                  # number of lidar channel (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
   Horizon_SCAN: 1800                          # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
   downsampleRate: 1                           # default: 1. Downsample your data if too many points. i.e., 16 = 64 / 4, 16 = 16 / 1
   lidarMinRange: 1.5                          # default: 1.0, minimum lidar range to be used
@@ -55,11 +53,11 @@ lio_sam_6axis:
   # Extrinsics (lidar -> IMU)
   imu_type: 0   # 0: 6axis, 1:9 axis
   # lidar frame to imu frame
-  extrinsicTrans: [3.14093182e-01, 1.08047093e-02, 4.40600735e-01]
+  extrinsicTrans: [-0.0683902, 0.005061, 0.469481]
   # imu frame to lidar frame
-  extrinsicRot: [7.243900153441823e-02,   9.973717785844793e-01, -1.458197493260785e-03,
-                -9.973126287117104e-01,   7.241848516641565e-02, -1.109430567180834e-02,
-                -1.095954692651612e-02,   2.257939200768664e-03,  9.999373930610513e-01]
+  extrinsicRot: [1.4288500000000001e-02,  9.9979200000000001e-01,  1.6048400000000001e-02,
+                 -9.9988999999999995e-01,  1.2663300000000001e-02, -3.7801000000000002e-03,
+                 -3.9852799999999999e-03, -1.5999300000000001e-02,  9.9986399999999998e-01,]
   extrinsicRPY: [ 1, 0, 0,
                   0, 1, 0,
                   0, 0, 1 ]

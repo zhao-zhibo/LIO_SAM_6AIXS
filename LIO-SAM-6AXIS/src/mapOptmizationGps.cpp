@@ -645,8 +645,8 @@ public:
         *globalMapCloud += *globalCornerCloudDS;
         *globalMapCloud += *globalSurfCloudDS;
 
-        // 保存原始点云，但是点云转换到了全局坐标系中
-        *globalMapCloud += *globalRawCloud;
+        // 保存原始点云，但是点云转换到了全局坐标系中，不保存到最终的地图中，也就是说最终的地图只保存面和线的特征点
+        // *globalMapCloud += *globalRawCloud;
 
        downSizeFilterSurf.setInputCloud(globalRawCloud);
        downSizeFilterSurf.setLeafSize(globalMapLeafSize, globalMapLeafSize,
