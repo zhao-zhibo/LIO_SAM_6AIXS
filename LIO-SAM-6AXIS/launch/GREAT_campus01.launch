@@ -1,6 +1,6 @@
 <launch>
     <arg name="project" default="lio_sam_6axis"/>
-    <!-- <arg name="bag_path" default="/media/xchu/e81eaf80-d92c-413a-a503-1c9b35b19963/home/xchu/data/hkust/outdoors/hkust_20201105full.bag"/> -->
+    <arg name="bag_path" default="/media/zhao/ZhaoZhibo1/AllData/GREAT/campus-01/campus-01.bag"/>
     <arg name="sequence" default="hkust_campus"/>
 
     <!--set your own Parameters -->
@@ -28,6 +28,6 @@
     <node pkg="rviz" type="rviz" name="$(arg project)_rviz"
           args="-d $(find lio_sam_6axis)/launch/include/config/vlp.rviz"/>
 
-    <!-- <node pkg="rosbag" type="play" name="bag_play" args="$(arg bag_path) clock -d 5 -r 2.0"/> -->
+    <node pkg="rosbag" type="play" name="bag_play" args="$(arg bag_path)  -d 5 -r 1.0"/>
 
 </launch>

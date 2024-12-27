@@ -1,6 +1,7 @@
 <launch>
+    <!-- 这组数据，回环失败 -->
     <arg name="project" default="lio_sam_6axis"/>
-    <!-- <arg name="bag_path" default="/media/xchu/e81eaf80-d92c-413a-a503-1c9b35b19963/home/xchu/data/hkust/outdoors/hkust_20201105full.bag"/> -->
+    <arg name="bag_path" default="/media/zhao/ZhaoZhibo1/AllData/GREAT/suburb-02/suburb-02.bag"/>
     <arg name="sequence" default="hkust_campus"/>
 
     <!--set your own Parameters -->
@@ -28,6 +29,6 @@
     <node pkg="rviz" type="rviz" name="$(arg project)_rviz"
           args="-d $(find lio_sam_6axis)/launch/include/config/vlp.rviz"/>
 
-    <!-- <node pkg="rosbag" type="play" name="bag_play" args="$(arg bag_path) clock -d 5 -r 2.0"/> -->
+    <node pkg="rosbag" type="play" name="bag_play" args="$(arg bag_path)  -d 3 -r 5.0"/>
 
 </launch>
