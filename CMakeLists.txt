@@ -56,9 +56,9 @@ else()
 
   # search for catkin in all workspaces
   set(CATKIN_TOPLEVEL_FIND_PACKAGE TRUE)
-  find_package(Boost REQUIRED COMPONENTS timer)
+  # find_package(Boost REQUIRED COMPONENTS timer)
   find_package(Boost REQUIRED COMPONENTS serialization)
-  find_package(Boost REQUIRED COMPONENTS thread)
+  # find_package(Boost REQUIRED COMPONENTS thread)
   find_package(Boost REQUIRED COMPONENTS chrono)
   find_package(catkin QUIET
     NO_POLICY_SCOPE

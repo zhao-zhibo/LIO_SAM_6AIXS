@@ -1,3 +1,4 @@
+#define PCL_NO_PRECOMPILE
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/inference/Symbol.h>
@@ -17,6 +18,7 @@
 #include <GeographicLib/LocalCartesian.hpp>
 #include <GeographicLib/Geoid.hpp>
 #include <csignal>
+#include <pcl/search/impl/search.hpp>
 
 #include "dataSaver.h"
 #include "lio_sam_6axis/cloud_info.h"
@@ -29,7 +31,6 @@ using symbol_shorthand::B;  // Bias  (ax,ay,az,gx,gy,gz)
 using symbol_shorthand::G;  // GPS pose
 using symbol_shorthand::V;  // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::X;  // Pose3 (x,y,z,r,p,y)
-
 /*
  * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is
  * time stamp)

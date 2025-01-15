@@ -5,7 +5,7 @@ set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "-std=c++14")
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g -pthread")
-find_package(Boost REQUIRED COMPONENTS timer)
+find_package(Boost REQUIRED COMPONENTS timer thread date_time)
 find_package(catkin REQUIRED COMPONENTS
         tf
         roscpp
@@ -30,6 +30,9 @@ if (NOT LIBXML2_FOUND)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(Y REQUIRED libxml-2.0)
 endif ()
+message(STATUS "PCL_LIBRARIES: ${PCL_LIBRARIES}")
+message(STATUS "PCL_INCLUDE_DIRS: ${PCL_INCLUDE_DIRS}")
+message(STATUS "GTSAM_INCLUDE_DIR: ${GTSAM_INCLUDE_DIR}")
 
 add_message_files(
         DIRECTORY msg
