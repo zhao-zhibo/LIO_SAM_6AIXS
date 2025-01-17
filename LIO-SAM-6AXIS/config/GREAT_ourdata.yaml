@@ -3,6 +3,7 @@ lio_sam_6axis:
   #  velodyne16 and stim300(6 axis)
 
   # 数据在进入隧道600秒左右开始飘了，因此需要在进入隧道前后进行重定位
+  # This is degenerate branch
 
   # Topics
   pointCloudTopic: "/points_raw"               # Point cloud data
