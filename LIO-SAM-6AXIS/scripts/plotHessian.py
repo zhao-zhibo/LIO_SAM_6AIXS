@@ -32,13 +32,14 @@ def update_plot(frame):
         ax1.grid(True)
 
         # 设置纵轴格式为实际数值
-        ax1.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
+        ax1.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
         ax1.ticklabel_format(style='plain', axis='y')
 
         # 绘制旋转矩阵特征值
         colors = ['r', 'g', 'b']
+        labels_rotation = ['Roll Eigenvalue', 'Pitch Eigenvalue', 'Yaw Eigenvalue']
         for i in range(3):
-            ax2.plot(time_data, eigvals_rotation_data[i], label=f"Rotation Eigenvalue {i+1}", color=colors[i])
+            ax2.plot(time_data, eigvals_rotation_data[i], label=labels_rotation[i], color=colors[i])
         ax2.set_title("Rotation Eigenvalues vs. Time")
         ax2.set_xlabel("Time (s)")
         ax2.set_ylabel("Rotation Eigenvalues")
@@ -46,12 +47,13 @@ def update_plot(frame):
         ax2.grid(True)
 
         # 设置纵轴格式为实际数值
-        ax2.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
+        ax2.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
         ax2.ticklabel_format(style='plain', axis='y')
 
         # 绘制平移矩阵特征值
+        labels_translation = ['X Eigenvalue', 'Y Eigenvalue', 'Z Eigenvalue']
         for i in range(3):
-            ax3.plot(time_data, eigvals_translation_data[i], label=f"Translation Eigenvalue {i+1}", color=colors[i], linestyle='--')
+            ax3.plot(time_data, eigvals_translation_data[i], label=labels_translation[i], color=colors[i], linestyle='--')
         ax3.set_title("Translation Eigenvalues vs. Time")
         ax3.set_xlabel("Time (s)")
         ax3.set_ylabel("Translation Eigenvalues")
@@ -59,7 +61,7 @@ def update_plot(frame):
         ax3.grid(True)
 
         # 设置纵轴格式为实际数值
-        ax3.yaxis.set_major_formatter(ScalarFormatter(useMathText=False))
+        ax3.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
         ax3.ticklabel_format(style='plain', axis='y')
 
         plt.tight_layout()
@@ -92,7 +94,7 @@ def hessian_matrix_callback(msg):
     for i in range(3):
         eigvals_rotation_data[i].append(eigvals_rotation[i].real)  # 取实部
         eigvals_translation_data[i].append(eigvals_translation[i].real)  # 取实部
-    rospy.loginfo(f"Timestamp: {timestamp_s:.4f}s, Rotation Eigenvalues: {eigvals_rotation}, Translation Eigenvalues: {eigvals_translation}")
+    # rospy.loginfo(f"Timestamp: {timestamp_s:.4f}s, Rotation Eigenvalues: {eigvals_rotation}, Translation Eigenvalues: {eigvals_translation}")
 
 
 def hessian_matrix_listener():
