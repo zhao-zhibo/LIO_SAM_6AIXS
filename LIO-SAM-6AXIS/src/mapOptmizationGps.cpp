@@ -24,6 +24,7 @@
 #include "lio_sam_6axis/cloud_info.h"
 #include "lio_sam_6axis/save_map.h"
 #include "utility.h"
+#include "std_msgs/Float32MultiArray.h"
 
 using namespace gtsam;
 
@@ -81,6 +82,7 @@ public:
     ros::Publisher pubGpsConstraintEdge;
 
     ros::Publisher pubSLAMInfo;
+    ros::Publisher pubHessianMatrix; // 发布开始优化时的第一次的Hessian矩阵
 
     ros::Subscriber subCloud;
     ros::Subscriber subGPS;
@@ -263,6 +265,8 @@ public:
 
         pubSLAMInfo = nh.advertise<lio_sam_6axis::cloud_info>(
                 "lio_sam_6axis/mapping/slam_info", 1);
+
+        pubHessianMatrix = nh.advertise<std_msgs::Float32MultiArray>("lio_sam_6axis/mapping/hessian_matrix", 50);
 
         downSizeFilterCorner.setLeafSize(
                 mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
@@ -1620,6 +1624,38 @@ public:
                   false);
     }
 
+    // 发布海塞矩阵到python节点，方便接收使用
+    void publishHessianMatrix(cv::Mat mat) {
+        if (mat.type() != CV_32F || mat.rows != 6 || mat.cols != 6) {
+            ROS_ERROR("Matrix must be 6x6 with type CV_32F.");
+            return;
+        }
+
+        std_msgs::Float32MultiArray matrix_msg;
+        matrix_msg.layout.dim.push_back(std_msgs::MultiArrayDimension());
+        matrix_msg.layout.dim[0].label = "rows";
+        matrix_msg.layout.dim[0].size = mat.rows;
+        matrix_msg.layout.dim[0].stride = mat.rows * mat.cols;
+
+        matrix_msg.layout.dim.push_back(std_msgs::MultiArrayDimension());
+        matrix_msg.layout.dim[1].label = "cols";
+        matrix_msg.layout.dim[1].size = mat.cols;
+        matrix_msg.layout.dim[1].stride = mat.cols;
+
+        matrix_msg.data.resize(mat.rows * mat.cols);
+        for (int i = 0; i < mat.rows; ++i) {
+            for (int j = 0; j < mat.cols; ++j) {
+                matrix_msg.data[i * mat.cols + j] = mat.at<float>(i, j);
+            }
+        }
+
+        // 时间戳单位为秒，乘以1e4，因为data_offset类型为uint32_t，即为无符号整型
+        matrix_msg.layout.data_offset = timeLaserInfoStamp.toSec() * 1e4;
+
+        pubHessianMatrix.publish(matrix_msg);
+    }
+
+
     bool LMOptimization(int iterCount) {
         // This optimization is from the original loam_velodyne by Ji Zhang, need to
         // cope with coordinate transformation lidar <- camera      ---     camera
@@ -1641,9 +1677,9 @@ public:
             return false;
         }
 
-        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
+        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));  // A,也就是雅可比矩阵
+        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0)); // A的转置
+        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0)); // 海塞矩阵，就是A的转置乘以A
         cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
@@ -1703,6 +1739,8 @@ public:
         cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
 
         if (iterCount == 0) {
+            // 判断是否退化是在第一次迭代里面发生的，发布第一次的海塞矩阵到话题中
+            publishHessianMatrix(matAtA);
             cv::Mat matE(1, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
