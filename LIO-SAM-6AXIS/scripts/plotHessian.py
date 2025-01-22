@@ -81,8 +81,10 @@ def hessian_matrix_callback(msg):
     translation_matrix = matrix[3:6, 3:6]
 
     # 计算特征值和特征值比
-    eigvals_rotation = np.linalg.eigvals(rotation_matrix)
-    eigvals_translation = np.linalg.eigvals(translation_matrix)
+    U_rotation, S_rotation, Vt_rotation = np.linalg.svd(rotation_matrix)
+    U_translation, S_translation, Vt_translation = np.linalg.svd(translation_matrix)
+    eigvals_rotation = S_rotation
+    eigvals_translation = S_translation
 
     Sr = max(eigvals_rotation) / min(eigvals_rotation)
     St = max(eigvals_translation) / min(eigvals_translation)
