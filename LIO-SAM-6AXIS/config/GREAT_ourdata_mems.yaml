@@ -81,13 +81,13 @@ lio_sam_6axis:
   rotation_tollerance: 1000                     # radians
 
   # CPU Params
-  numberOfCores: 8                              # number of cores for mapping optimization
-  mappingProcessInterval: 0.15                  # seconds, regulate mapping frequency
+  numberOfCores: 64                             # number of cores for mapping optimization
+  mappingProcessInterval: 0.0                   # seconds, regulate mapping frequency
 
-  # Surrounding map
-  surroundingkeyframeAddingDistThreshold: 0.5   # meters, regulate keyframe adding threshold
-  surroundingkeyframeAddingAngleThreshold: 0.2  # radians, regulate keyframe adding threshold
-  surroundingKeyframeDensity: 2.0               # meters, downsample surrounding keyframe poses   
+  # Surrounding map 修改关键帧的阈值，使其能够以更高的频率添加关键帧，也就是0.1秒添加一个关键帧
+  surroundingkeyframeAddingDistThreshold: 0.00   # meters, regulate keyframe adding threshold
+  surroundingkeyframeAddingAngleThreshold: 0.00  # radians, regulate keyframe adding threshold
+  surroundingKeyframeDensity: 0.1               # meters, downsample surrounding keyframe poses   
   surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization (when loop closure disabled)
 
   # Loop closure
@@ -106,7 +106,7 @@ lio_sam_6axis:
 
 
   # mapping
-  globalMapLeafSize: 0.3                        # saved map voxgrid size
+  globalMapLeafSize: 0.6                        # saved map voxgrid size
 
 
 # Navsat (convert GPS coordinates to Cartesian)
