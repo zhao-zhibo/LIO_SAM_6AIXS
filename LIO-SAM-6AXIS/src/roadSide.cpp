@@ -40,8 +40,22 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(
 // Use the Velodyne point format as a common representation
 using PointXYZIRT = VelodynePointXYZIRT;
 class RoadSide : public ParamServer {
+private:
     ros::Subscriber subRoadSideCloud;
+
+public:
+    RoadSide() {
+    subRoadSideCloud = nh.subscribe<sensor_msgs::PointCloud2>(roadSidePointTopic, 10, &RoadSide::roadSideCloudHandler, this,
+            ros::TransportHints().tcpNoDelay()); }
+
+    void roadSideCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
+    }
+
+    void CloudRegistration(const std::vector<Eigen::Vector4f>& target_points, const std::vector<Eigen::Vector4f>& source_points) {
+    }
+
 };
+
 
 
 int main(int argc, char **argv) {

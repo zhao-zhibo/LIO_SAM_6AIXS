@@ -72,6 +72,7 @@ public:
 
     //Topics
     string pointCloudTopic;
+    string roadSidePointTopic;
     string imuTopic;
     string odomTopic;
     string gpsTopic;
@@ -189,6 +190,7 @@ public:
         nh.param<std::string>("/robot_id", robot_id, "roboat");
 
         nh.param<std::string>("lio_sam_6axis/pointCloudTopic", pointCloudTopic, "points_raw");
+        nh.param<std::string>("lio_sam_6axis/roadSidePointTopic", roadSidePointTopic, "roadSidepoints");
         nh.param<std::string>("lio_sam_6axis/imuTopic", imuTopic, "imu_correct");
         nh.param<std::string>("lio_sam_6axis/odomTopic", odomTopic, "odometry/imu");
         nh.param<std::string>("lio_sam_6axis/gpsTopic", gpsTopic, "fix");
