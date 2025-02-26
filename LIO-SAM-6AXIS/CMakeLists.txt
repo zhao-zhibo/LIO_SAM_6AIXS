@@ -120,3 +120,12 @@ target_link_libraries(${PROJECT_NAME}_mapOptmization ${catkin_LIBRARIES} ${PCL_L
 # IMU Preintegration
 add_executable(${PROJECT_NAME}_imuPreintegration src/imuPreintegration.cpp)
 target_link_libraries(${PROJECT_NAME}_imuPreintegration ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam ${LIBXML2_LIBRARIES} ${Y_LIBRARIES})
+
+
+# 插入python文件的执行
+catkin_install_python(PROGRAMS scripts/callAllCommand.py
+                      DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+# 插入python文件的执行
+catkin_install_python(PROGRAMS scripts/plotHessian.py
+                      DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

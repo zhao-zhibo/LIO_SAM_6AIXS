@@ -24,6 +24,7 @@
 #include "lio_sam_6axis/cloud_info.h"
 #include "lio_sam_6axis/save_map.h"
 #include "utility.h"
+#include "std_msgs/Float32MultiArray.h"
 
 using namespace gtsam;
 
@@ -81,6 +82,7 @@ public:
     ros::Publisher pubGpsConstraintEdge;
 
     ros::Publisher pubSLAMInfo;
+    ros::Publisher pubHessianMatrix; // 发布开始优化时的第一次的Hessian矩阵
 
     ros::Subscriber subCloud;
     ros::Subscriber subGPS;
@@ -263,6 +265,8 @@ public:
 
         pubSLAMInfo = nh.advertise<lio_sam_6axis::cloud_info>(
                 "lio_sam_6axis/mapping/slam_info", 1);
+
+        pubHessianMatrix = nh.advertise<std_msgs::Float32MultiArray>("lio_sam_6axis/mapping/hessian_matrix", 50);
 
         downSizeFilterCorner.setLeafSize(
                 mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
@@ -1620,20 +1624,55 @@ public:
                   false);
     }
 
-    bool LMOptimization(int iterCount) {
-        // This optimization is from the original loam_velodyne by Ji Zhang, need to
-        // cope with coordinate transformation lidar <- camera      ---     camera
-        // <- lidar x = z                ---     x = y y = x                --- y =
-        // z z = y                ---     z = x roll = yaw           ---     roll =
-        // pitch pitch = roll         ---     pitch = yaw yaw = pitch          ---
-        // yaw = roll
+    // 发布海塞矩阵到python节点，方便接收使用
+    void publishHessianMatrix(cv::Mat mat) {
+        if (mat.type() != CV_32F || mat.rows != 6 || mat.cols != 6) {
+            ROS_ERROR("Matrix must be 6x6 with type CV_32F.");
+            return;
+        }
 
-        // lidar -> camera
-        float srx = sin(transformTobeMapped[1]);
+        std_msgs::Float32MultiArray matrix_msg;
+        matrix_msg.layout.dim.push_back(std_msgs::MultiArrayDimension());
+        matrix_msg.layout.dim[0].label = "rows";
+        matrix_msg.layout.dim[0].size = mat.rows;
+        matrix_msg.layout.dim[0].stride = mat.rows * mat.cols;
+
+        matrix_msg.layout.dim.push_back(std_msgs::MultiArrayDimension());
+        matrix_msg.layout.dim[1].label = "cols";
+        matrix_msg.layout.dim[1].size = mat.cols;
+        matrix_msg.layout.dim[1].stride = mat.cols;
+
+        matrix_msg.data.resize(mat.rows * mat.cols);
+        for (int i = 0; i < mat.rows; ++i) {
+            for (int j = 0; j < mat.cols; ++j) {
+                matrix_msg.data[i * mat.cols + j] = mat.at<float>(i, j);
+            }
+        }
+
+        // 时间戳单位为秒，乘以1e4，因为data_offset类型为uint32_t，即为无符号整型
+        matrix_msg.layout.data_offset = timeLaserInfoStamp.toSec() * 1e4;
+
+        pubHessianMatrix.publish(matrix_msg);
+    }
+
+
+    bool LMOptimization(int iterCount) {
+        // 原始的loam代码是将lidar坐标系转到相机坐标系，这里把原先loam中的代码拷贝了过来，但是为了坐标系的统一，就先转到相机系优化，然后结果转回lidar系
+        // This optimization is from the original loam_velodyne by Ji Zhang, need to cope with coordinate transformation
+        // lidar <- camera      ---     camera <- lidar
+        // x = z                ---     x = y
+        // y = x                ---     y = z
+        // z = y                ---     z = x
+        // roll = yaw           ---     roll = pitch
+        // pitch = roll         ---     pitch = yaw
+        // yaw = pitch          ---     yaw = roll
+
+        // lidar -> camera 将lidar系转到相机系
+        float srx = sin(transformTobeMapped[1]); // transformTobeMapped[1]为lidar坐标系下的y pitch角
         float crx = cos(transformTobeMapped[1]);
-        float sry = sin(transformTobeMapped[2]);
+        float sry = sin(transformTobeMapped[2]); // transformTobeMapped[2]为ldiar坐标系下的z  yaw角
         float cry = cos(transformTobeMapped[2]);
-        float srz = sin(transformTobeMapped[0]);
+        float srz = sin(transformTobeMapped[0]); // transformTobeMapped[0]为lidar坐标系下的x roll角
         float crz = cos(transformTobeMapped[0]);
 
         int laserCloudSelNum = laserCloudOri->size();
@@ -1641,9 +1680,9 @@ public:
             return false;
         }
 
-        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
+        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));  // A,也就是雅可比矩阵
+        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0)); // A的转置
+        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0)); // 海塞矩阵，就是A的转置乘以A
         cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
@@ -1661,6 +1700,8 @@ public:
             coeff.z = coeffSel->points[i].x;
             coeff.intensity = coeffSel->points[i].intensity;
             // in camera
+            // 相机系下的旋转顺序是Y - X - Z对应lidar系下Z -Y -X
+            // camera中的roll横滚角(对应camera的arx，因为roll的定义是横滚角，定义就是绕x轴旋转),对应lidar中的pitch
             float arx = (crx * sry * srz * pointOri.x + crx * crz * sry * pointOri.y -
                          srx * sry * pointOri.z) *
                         coeff.x +
@@ -1669,8 +1710,8 @@ public:
                         coeff.y +
                         (crx * cry * srz * pointOri.x + crx * cry * crz * pointOri.y -
                          cry * srx * pointOri.z) *
-                        coeff.z;
-
+                        coeff.z; // 关于roll的导数
+            // camera中的pitch俯仰角(对应camera的ary，pitch的定义就是绕y轴旋转),对应lidar中的yaw
             float ary = ((cry * srx * srz - crz * sry) * pointOri.x +
                          (sry * srz + cry * crz * srx) * pointOri.y +
                          crx * cry * pointOri.z) *
@@ -1679,7 +1720,7 @@ public:
                          (cry * srz - crz * srx * sry) * pointOri.y -
                          crx * sry * pointOri.z) *
                         coeff.z;
-
+            // camera中的yaw航向角(对应camera中的arz，yaw的定义就是绕z轴旋转),对应lidar中的roll
             float arz = ((crz * srx * sry - cry * srz) * pointOri.x +
                          (-cry * crz - srx * sry * srz) * pointOri.y) *
                         coeff.x +
@@ -1688,26 +1729,28 @@ public:
                          (crz * sry - cry * srx * srz) * pointOri.y) *
                         coeff.z;
             // camera -> lidar
-            matA.at<float>(i, 0) = arz;
-            matA.at<float>(i, 1) = arx;
-            matA.at<float>(i, 2) = ary;
-            matA.at<float>(i, 3) = coeff.z;
-            matA.at<float>(i, 4) = coeff.x;
-            matA.at<float>(i, 5) = coeff.y;
+            matA.at<float>(i, 0) = arz; // matA(i, 0)为lidar坐标系下的雅可比矩阵中的x，即为lidar系下的roll
+            matA.at<float>(i, 1) = arx; // matA(i, 1)为lidar坐标系下的雅可比矩阵中的y,即为lidarx系下的pitch
+            matA.at<float>(i, 2) = ary; // matA(i, 2)为lidar坐标系下的雅可比矩阵中的z,即为lidar系下的yaw
+            matA.at<float>(i, 3) = coeff.z; // 雅可比矩阵中的x
+            matA.at<float>(i, 4) = coeff.x; // 雅可比矩阵中的y
+            matA.at<float>(i, 5) = coeff.y; // 雅可比矩阵中的z
             matB.at<float>(i, 0) = -coeff.intensity;
         }
 
         cv::transpose(matA, matAt);
-        matAtA = matAt * matA;
+        matAtA = matAt * matA; // matAtA为海塞矩阵，对应的特征值分别是roll,pitch,yaw,x,y,z方向的特征值
         matAtB = matAt * matB;
         cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
 
         if (iterCount == 0) {
+            // 判断是否退化是在第一次迭代里面发生的，发布第一次的海塞矩阵到话题中
+            publishHessianMatrix(matAtA);
             cv::Mat matE(1, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
 
-            cv::eigen(matAtA, matE, matV);
+            cv::eigen(matAtA, matE, matV); // 对应的特征值分别是roll,pitch,yaw,x,y,z方向的特征值
             matV.copyTo(matV2);
 
             isDegenerate = false;
