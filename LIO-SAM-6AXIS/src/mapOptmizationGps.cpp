@@ -91,7 +91,7 @@ public:
     ros::ServiceServer srvSaveMap;
 
     std::deque<nav_msgs::Odometry> gpsQueue;
-    lio_sam_6axis::cloud_info cloudInfo;
+    lio_sam_6axis::cloud_info cloudInfo; // 从laserCloudInfoHandler进行赋值，接入的话题是lio_sam_6axis/feature/cloud_info。
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;

@@ -2,12 +2,9 @@ lio_sam_6axis:
 
   #  velodyne16 and stim300(6 axis)
 
-  # 数据在进入隧道600秒左右开始飘了，因此需要在进入隧道前后进行重定位
-  # This is degenerate branch
-
   # Topics
   pointCloudTopic: "/points_raw"               # Point cloud data
-  roadSidePointTopic: "/roadSidePoints"
+  roadSidePointTopic: "/90m_velodyne_points"   # Road side point cloud data
   imuTopic: "/imu_raw"                         # IMU data
   odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
   gpsTopic: "fix"                   # GPS odometry topic from navsat, see module_navsat.launch file
@@ -22,7 +19,7 @@ lio_sam_6axis:
   useGPS: false
   updateOrigin: true                          # when you can not get a reliable gps origin points(RTK fixed)
   gpsFrequence: 10                            # set proper gps frequence to align gps and lidar timestamp
-  useImuHeadingInitialization: false         # if using GPS data, set to "false"
+  useImuHeadingInitialization: true         # if using GPS data, set to "false"  不用gps时为true，初始航向角不会置为0了，从cloudInfo.imuYawInit中获取
   useGpsElevation: true                      # if GPS elevation is bad, set to "false"
   gpsCovThreshold: 8                        # m^2, threshold for using GPS data
   poseCovThreshold: 25.0                      # m^2, threshold for using GPS data
