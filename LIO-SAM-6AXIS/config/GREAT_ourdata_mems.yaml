@@ -51,9 +51,9 @@ lio_sam_6axis:
   imuAngularIsDegree: true
   imuAccelerIsG: false
 
-  # Extrinsics (lidar -> IMU)
+  # Extrinsics
   imu_type: 0   # 0: 6axis, 1:9 axis
-  # lidar frame to imu frame  在lidar坐标系下,imu原点的位置
+  # lidar frame to imu frame  在lidar坐标系下,imu原点的位置  这个别人觉得也是imu frame to lidar frame，我是不是写错了？
   extrinsicTrans: [0.02,  -0.25, -0.4]
   # imu frame to lidar frame
   extrinsicRot:  [ 0.999817497860517,0.018112103798910352,0.006049795816253419,
@@ -83,8 +83,8 @@ lio_sam_6axis:
   mappingProcessInterval: 0.0                   # seconds, regulate mapping frequency
 
   # Surrounding map 修改关键帧的阈值，使其能够以更高的频率添加关键帧，也就是0.1秒添加一个关键帧
-  surroundingkeyframeAddingDistThreshold: 0.00   # meters, regulate keyframe adding threshold
-  surroundingkeyframeAddingAngleThreshold: 0.00  # radians, regulate keyframe adding threshold
+  surroundingkeyframeAddingDistThreshold: -10   # meters, regulate keyframe adding threshold
+  surroundingkeyframeAddingAngleThreshold: -10  # radians, regulate keyframe adding threshold
   surroundingKeyframeDensity: 0.1               # meters, downsample surrounding keyframe poses   
   surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization (when loop closure disabled)
 
