@@ -25,6 +25,13 @@
 #include "lio_sam_6axis/save_map.h"
 #include "utility.h"
 #include "std_msgs/Float32MultiArray.h"
+#include <iostream>
+#include <sstream>
+#include <cstdio>
+#include <string>
+#include <ros/ros.h>
+#include <ros/package.h>
+
 
 using namespace gtsam;
 
@@ -165,7 +172,7 @@ public:
     int lastLoopIndex = -1;
 
     ros::Time timeLaserInfoStamp;
-    double timeLaserInfoCur;
+    double timeLaserInfoCur; // 当前处理帧的时间戳
     // double timeStampInitial;
 
     float transformTobeMapped[6];
@@ -1134,6 +1141,54 @@ public:
         pubGpsConstraintEdge.publish(markerArray);
     }
 
+    // 调用python脚本获取指定时间戳的位姿变换矩阵
+    /**
+     * @brief 调用Python脚本获取指定时间戳的4x4变换矩阵
+     * @param timestamp 输入时间戳
+     * @return Eigen::Matrix4d 4x4齐次变换矩阵（直接可用作位姿变换）
+     */
+    Eigen::Matrix4d GetTransformFromPython(double timestamp) {
+        Eigen::Matrix4d transform = Eigen::Matrix4d::Identity(); // 默认返回单位矩阵
+        
+        // 获取ROS包路径
+        std::string package_path = ros::package::getPath("lio_sam_6axis");
+        std::string script_path = package_path + "/scripts/GetInitialnTransForm.py";
+        
+        // 构建执行命令
+        std::string cmd = "python3 " + script_path + " " + std::to_string(timestamp);
+        ROS_DEBUG("Executing command: %s", cmd.c_str());
+
+        // 执行Python脚本
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            ROS_ERROR("Failed to execute: %s", cmd.c_str());
+            return transform; // 返回单位矩阵作为安全值
+        }
+
+        // 读取并解析输出
+        char buffer[1024];
+        if (fgets(buffer, sizeof(buffer), pipe)) {
+            std::stringstream ss(buffer);
+            try {
+                // 直接填充Eigen矩阵（按行优先）
+                for (int row = 0; row < 4; ++row) {
+                    for (int col = 0; col < 4; ++col) {
+                        double val;
+                        ss >> val;
+                        transform(row, col) = val; // Eigen默认列优先，此处按显式下标操作
+                    }
+                }
+            } catch (const std::exception& e) {
+                ROS_ERROR("Matrix parsing failed: %s", e.what());
+                transform.setIdentity();
+            }
+        } else {
+            ROS_WARN("No output from Python script");
+        }
+
+        pclose(pipe);
+        return transform;
+    }
     // 将上一帧lidar最优估计的位姿(transformTobeMapped)转换到了当前帧lidar位姿，这个位姿后面要拿来作为当前帧的初始位姿
     void updateInitialGuess() {
         // save current transformation before any processing  上一帧isam优化后的最佳位姿
@@ -1221,6 +1276,12 @@ public:
                         cloudInfo.imuYawInit);
 
                 systemInitialized = true;
+                return;
+            }
+
+            // 如果使用车辆的初始位姿，那么就将车辆的初始位姿作为第一帧的位姿，然后就去调用python脚本找到第一帧的位姿
+            if(uesInitialVehiclePose){
+                Eigen::Matrix4d InitialTransform = GetTransformFromPython(timeLaserInfoCur);
                 return;
             }
         }

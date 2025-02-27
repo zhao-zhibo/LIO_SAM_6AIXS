@@ -51,6 +51,22 @@ lio_sam_6axis:
   imuAngularIsDegree: true
   imuAccelerIsG: false
 
+  # RoadSide Settings
+  useRoadSide: true
+  # 路侧Lidar和n系的变换矩阵
+  T_NRoadSideLidar:  [1, 0, 0, 0,
+                      0, 1, 0, 0,
+                      0, 0, 1, 0,
+                      0, 0, 0, 1]
+  # 确定是否要用初始位置进行初始化，车辆的初始位置是从python中插值得到的
+  uesInitialVehiclePose: true
+  # 初始时刻车载lidar和n系的变换矩阵，暂时先不用，初始时刻的位置和姿态需要从文件中差分
+  T_NVehicleLidar0: [1, 0, 0, 0,
+               0, 1, 0, 0,
+               0, 0, 1, 0,
+               0, 0, 0, 1]
+
+
   # Extrinsics
   imu_type: 0   # 0: 6axis, 1:9 axis
   # lidar frame to imu frame  在lidar坐标系下,imu原点的位置  这个别人觉得也是imu frame to lidar frame，我是不是写错了？

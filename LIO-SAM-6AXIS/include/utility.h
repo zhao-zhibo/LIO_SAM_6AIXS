@@ -88,6 +88,8 @@ public:
     // GPS Settings
     int gpsFrequence;
     bool useGPS;
+    bool useRoadSide;
+    bool uesInitialVehiclePose;
     bool updateOrigin;
     bool useImuHeadingInitialization;
     bool useGpsElevation;
@@ -145,6 +147,10 @@ public:
     Eigen::Vector3d t_sensor_body;
     Eigen::Quaterniond q_body_sensor;
     Eigen::Vector3d t_body_sensor;
+
+    // 路侧lidar在n系下的位置和姿态
+    vector<double> T_nRoadSideV;
+    Eigen::Matrix4d T_nRoadSide;
 
     // LOAM
     float edgeThreshold; // 边缘点曲率的阈值
@@ -215,6 +221,14 @@ public:
         nh.param<bool>("lio_sam_6axis/debugGps", debugGps, false);
         nh.param<bool>("lio_sam_6axis/imuAngularIsDegree", imuAngularIsDegree, false);
         nh.param<bool>("lio_sam_6axis/imuAccelerIsG", imuAccelerIsG, false);
+
+        // 关于路侧lidar的参数配置
+        nh.param<bool>("lio_sam_6axis/useRoadSide", useRoadSide, false);
+        if (useRoadSide) {
+            nh.param<vector<double >>("lio_sam_6axis/T_nRoadSide", T_nRoadSideV, vector<double>());
+            T_nRoadSide = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_nRoadSideV.data(), 4, 4);
+        }
+        nh.param<bool>("lio_sam_6axis/uesInitialVehiclePose", uesInitialVehiclePose, false);
 
         nh.param<bool>("lio_sam_6axis/savePCD", savePCD, false);
         nh.param<std::string>("lio_sam_6axis/savePCDDirectory", savePCDDirectory, "/Downloads/LOAM/");

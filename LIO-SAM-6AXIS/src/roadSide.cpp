@@ -42,13 +42,25 @@ using PointXYZIRT = VelodynePointXYZIRT;
 class RoadSide : public ParamServer {
 private:
     ros::Subscriber subRoadSideCloud;
+    ros::Subscriber subVehicleCloud;
 
 public:
     RoadSide() {
-    subRoadSideCloud = nh.subscribe<sensor_msgs::PointCloud2>(roadSidePointTopic, 10, &RoadSide::roadSideCloudHandler, this,
-            ros::TransportHints().tcpNoDelay()); }
 
-    void roadSideCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
+    // 订阅车载点云话题
+    subVehicleCloud = nh.subscribe<lio_sam_6axis::cloud_info>("lio_sam_6axis/feature/cloud_info", 10, &RoadSide::VehicleCloudHandler, this,
+            ros::TransportHints().tcpNoDelay());
+    // 订阅路侧点云话题
+    subRoadSideCloud = nh.subscribe<sensor_msgs::PointCloud2>(roadSidePointTopic, 10, &RoadSide::RoadSideCloudHandler, this,
+            ros::TransportHints().tcpNoDelay()); }
+    // 订阅车辆的位置和姿态信息
+
+    // 发布路侧配准的结果
+
+    void RoadSideCloudHandler(const sensor_msgs::PointCloud2ConstPtr &laserCloudMsg) {
+    }
+
+    void VehicleCloudHandler(const lio_sam_6axis::cloud_infoConstPtr &msgIn) {
     }
 
     void CloudRegistration(const std::vector<Eigen::Vector4f>& target_points, const std::vector<Eigen::Vector4f>& source_points) {
@@ -65,7 +77,7 @@ int main(int argc, char **argv) {
 
     ROS_INFO("\033[1;32m----> RoadSide LiDAR Started.\033[0m");
 
-    ros::MultiThreadedSpinner spinner(3);
+    ros::MultiThreadedSpinner spinner(4);
     spinner.spin();
 
     return 0;
