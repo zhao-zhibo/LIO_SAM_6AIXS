@@ -52,14 +52,18 @@ lio_sam_6axis:
   imuAccelerIsG: false
 
   # RoadSide Settings
-  useRoadSide: true
+  useRoadSide: true # 当useRoadSide置为true时，后面有关路侧lidar的参数才会生效
+  debugRoadSide: true
+  roadTranslationErrorThreshold: 1.0 # 路侧lidar和车载lidar配准后的平移误差阈值 单位为米
+  roadRotationErrorThreshold: 5.0    # 路侧lidar和车载lidar配准后的旋转误差阈值 单位为度
+  toleranceTime: 0.05               # 路侧lidar和车载lidar配准的时间差阈值,就是配准的结果和当前帧结果可以容忍的时间，单位为秒
   # 路侧Lidar和n系的变换矩阵
   T_NRoadSideLidar:  [1, 0, 0, 0,
                       0, 1, 0, 0,
                       0, 0, 1, 0,
                       0, 0, 0, 1]
   # 确定是否要用初始位置进行初始化，车辆的初始位置是从python中插值得到的
-  uesInitialVehiclePose: true
+  uesInitialVehiclePose: false
   # 初始时刻车载lidar和n系的变换矩阵，暂时先不用，初始时刻的位置和姿态需要从文件中差分
   T_NVehicleLidar0: [1, 0, 0, 0,
                0, 1, 0, 0,

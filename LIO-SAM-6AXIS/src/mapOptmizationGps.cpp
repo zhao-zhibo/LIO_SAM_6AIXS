@@ -31,6 +31,7 @@
 #include <string>
 #include <ros/ros.h>
 #include <ros/package.h>
+#include <cmath> // 用于角度转换
 
 
 using namespace gtsam;
@@ -93,11 +94,13 @@ public:
 
     ros::Subscriber subCloud;
     ros::Subscriber subGPS;
+    ros::Subscriber subRoadSide;
     ros::Subscriber subLoop;
 
     ros::ServiceServer srvSaveMap;
 
     std::deque<nav_msgs::Odometry> gpsQueue;
+    std::deque<nav_msgs::Odometry> roadSideQueue;
     lio_sam_6axis::cloud_info cloudInfo; // 从laserCloudInfoHandler进行赋值，接入的话题是lio_sam_6axis/feature/cloud_info。
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
@@ -114,6 +117,7 @@ public:
 
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointType>::Ptr cloudKeyGPSPoses3D;
+    pcl::PointCloud<PointType>::Ptr cloudKeyroadSidePoses3D;
     pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses2D;
@@ -180,6 +184,7 @@ public:
     std::mutex mtx;
     std::mutex mtxLoopInfo;
     std::mutex mtxGpsInfo;
+    std::mutex mtxRoadSideInfo;
     std::mutex mtxGraph;
 
     // Eigen::Affine3f transGPS;
@@ -201,6 +206,7 @@ public:
     bool aLoopIsClosed = false;
     map<int, int> loopIndexContainer;  // from new to old
     map<int, int> gpsIndexContainer;   // from new to old
+    map<int, int> roadIndexContainer;   // 记录因子索引 (关键帧ID -> roadsidePoses索引
     vector<pair<int, int>> loopIndexQueue;
     vector<gtsam::Pose3> loopPoseQueue;
     vector<gtsam::noiseModel::Diagonal::shared_ptr> loopNoiseQueue;
@@ -246,6 +252,10 @@ public:
         subGPS = nh.subscribe<nav_msgs::Odometry>(
                 "gps_odom", 200, &mapOptimization::gpsHandler, this,
                 ros::TransportHints().tcpNoDelay());
+
+        subRoadSide = nh.subscribe<nav_msgs::Odometry>(
+                    "roadSide_odom", 200, &mapOptimization::RoadSideHandler, this,
+                    ros::TransportHints().tcpNoDelay());
 
         subLoop = nh.subscribe<std_msgs::Float64MultiArray>(
                 "lio_loop/loop_closure_detection", 1, &mapOptimization::loopInfoHandler,
@@ -403,6 +413,15 @@ public:
         }
     }
 
+
+    void RoadSideHandler(const nav_msgs::Odometry::ConstPtr &roadSideMsg) {
+        if (uesInitialVehiclePose) {
+            mtxRoadSideInfo.lock();
+            roadSideQueue.push_back(*roadSideMsg);
+            mtxRoadSideInfo.unlock();
+        }
+    }
+
     void pointAssociateToMap(PointType const *const pi, PointType *const po) {
         po->x = transPointAssociateToMap(0, 0) * pi->x +
                 transPointAssociateToMap(0, 1) * pi->y +
@@ -513,6 +532,44 @@ public:
             return true;
         else
             return false;
+    }
+
+    bool syncRoadSide(std::deque<nav_msgs::Odometry>& queue, 
+                    nav_msgs::Odometry& syncedData,
+                    const double& timestamp, 
+                    const double& timeTol) {
+        bool hasRoadSide = false;
+        
+        while (!queue.empty()) {
+            // 每次操作队列前加锁
+            mtxRoadSideInfo.lock();
+            
+            if (queue.front().header.stamp.toSec() < timestamp - timeTol) {
+                // 丢弃过时数据
+                queue.pop_front();
+                mtxRoadSideInfo.unlock();
+            } 
+            else if (queue.front().header.stamp.toSec() > timestamp + timeTol) {
+                // 保留未来数据
+                mtxRoadSideInfo.unlock();
+                break;
+            } 
+            else {
+                // 时间匹配的数据,最终保证数据时间在timestamp-tol~timestamp+tol之间，也就是前后0.2秒之内(timeTol默认给的是0.1，这个值可能有点大)
+                hasRoadSide = true;
+                syncedData = queue.front();
+                queue.pop_front();
+                
+                // 调试日志 (按需启用)
+                if (debugRoadSide) 
+                    ROS_INFO("RoadSide time offset %f", syncedData.header.stamp.toSec() - timestamp);
+                
+                mtxRoadSideInfo.unlock();
+                break;
+            }
+        }
+        
+        return hasRoadSide;
     }
 
     bool saveMapService(std_srvs::Empty::Request &req,
@@ -1264,7 +1321,35 @@ public:
                     systemInitialized = true;
                     ROS_WARN("GPS init success");
                 }
-            } else {
+            } else if(uesInitialVehiclePose) {
+                // 如果使用车辆的初始位姿，那么就将车辆的初始位姿作为第一帧的位姿，然后就去调用python脚本找到第一帧的位姿
+                // 获取Python脚本返回的初始变换矩阵
+                Eigen::Matrix4d InitialTransform = GetTransformFromPython(timeLaserInfoCur);
+
+                // 提取平移量 (x, y, z)
+                double x = InitialTransform(0, 3);
+                double y = InitialTransform(1, 3);
+                double z = InitialTransform(2, 3);
+                // 提取旋转矩阵并转换为欧拉角 (roll, pitch, yaw)
+                Eigen::Matrix3d R = InitialTransform.block<3, 3>(0, 0);
+                Eigen::Vector3d euler_angles = R.eulerAngles(2, 1, 0); // ZYX顺序: yaw(Z), pitch(Y), roll(X)
+                double roll = euler_angles[2];  // 对应绕X轴旋转
+                double pitch = euler_angles[1]; // 对应绕Y轴旋转
+                double yaw = euler_angles[0];   // 对应绕Z轴旋转
+                // 将欧拉角赋值给transformTobeMapped  下面这个姿态角还未进行校验，不确定和真值的姿态角的旋转顺序是否一致。
+                transformTobeMapped[0] = roll;   // 绕X轴
+                transformTobeMapped[1] = pitch;  // 绕Y轴
+                transformTobeMapped[2] = yaw;    // 绕Z轴
+                // 将平移量赋值给transformTobeMapped (假设索引3-5对应x,y,z)
+                transformTobeMapped[3] = x;
+                transformTobeMapped[4] = y;
+                transformTobeMapped[5] = z;
+
+                lastImuTransformation = pcl::getTransformation(x, y, z, roll, pitch, yaw);
+                systemInitialized = true;
+                return;
+            }
+            else {
                 transformTobeMapped[0] = cloudInfo.imuRollInit;
                 transformTobeMapped[1] = cloudInfo.imuPitchInit;
                 transformTobeMapped[2] = cloudInfo.imuYawInit;
@@ -1279,11 +1364,6 @@ public:
                 return;
             }
 
-            // 如果使用车辆的初始位姿，那么就将车辆的初始位姿作为第一帧的位姿，然后就去调用python脚本找到第一帧的位姿
-            if(uesInitialVehiclePose){
-                Eigen::Matrix4d InitialTransform = GetTransformFromPython(timeLaserInfoCur);
-                return;
-            }
         }
 
         if (!systemInitialized) {
@@ -2001,6 +2081,90 @@ public:
         }
     }
 
+    void addRoadSideFactor() {
+        if (roadSideQueue.empty()) 
+            return;
+
+        // 系统初始化检查
+        if (cloudKeyPoses3D->points.empty())
+            return;
+
+        // 时间同步
+        nav_msgs::Odometry thisRoadSide;
+        if (syncRoadSide(roadSideQueue, thisRoadSide, timeLaserInfoCur, toleranceTime)) {
+            // 提取协方差参数
+            const float noise_x = thisRoadSide.pose.covariance[0];
+            const float noise_y = thisRoadSide.pose.covariance[7];
+            const float noise_z = thisRoadSide.pose.covariance[14];
+            const float noise_roll = thisRoadSide.pose.covariance[21];
+            const float noise_pitch = thisRoadSide.pose.covariance[28];
+            const float noise_yaw = thisRoadSide.pose.covariance[35];
+    
+            // 转换旋转阈值为弧度
+            const double ROT_THRES_RAD = roadRotationErrorThreshold * M_PI / 180.0; // 度转弧度
+    
+            // 噪声阈值检查
+            if (noise_x > roadTranslationErrorThreshold || 
+                noise_y > roadTranslationErrorThreshold || 
+                noise_z > roadTranslationErrorThreshold ||
+                noise_roll > ROT_THRES_RAD || 
+                noise_pitch > ROT_THRES_RAD || 
+                noise_yaw > ROT_THRES_RAD) {
+                ROS_WARN("Roadside noise exceeds threshold (trans: %.2fm, rot: %.1fdeg), skipped.", 
+                        roadTranslationErrorThreshold, roadRotationErrorThreshold);
+                return;
+            }
+    
+            // 转换为位姿
+            Eigen::Isometry3d roadSidePose = Eigen::Isometry3d::Identity();
+            roadSidePose.translation() << 
+                thisRoadSide.pose.pose.position.x,
+                thisRoadSide.pose.pose.position.y,
+                thisRoadSide.pose.pose.position.z;
+            roadSidePose.linear() = Eigen::Quaterniond(
+                thisRoadSide.pose.pose.orientation.w,
+                thisRoadSide.pose.pose.orientation.x,
+                thisRoadSide.pose.pose.orientation.y,
+                thisRoadSide.pose.pose.orientation.z
+            ).toRotationMatrix();
+    
+            // 转换为GTSAM格式
+            const gtsam::Pose3 pose3(
+                gtsam::Rot3(roadSidePose.linear()), 
+                gtsam::Point3(roadSidePose.translation())
+            );
+    
+            // 构建噪声模型
+            gtsam::Vector6 noiseVec6;
+            noiseVec6 << noise_x, noise_y, noise_z, noise_roll, noise_pitch, noise_yaw;
+            gtsam::noiseModel::Diagonal::shared_ptr noiseModel = 
+                gtsam::noiseModel::Diagonal::Variances(noiseVec6);
+    
+            // 创建先验因子
+            const size_t currKeyframeId = cloudKeyPoses3D->size();
+            gtsam::PriorFactor<gtsam::Pose3> priorFactor(currKeyframeId, pose3, noiseModel);
+    
+            // 存储到容器
+            mtxGraph.lock();
+            // 记录因子索引 (关键帧ID -> roadsidePoses索引)
+            roadIndexContainer[currKeyframeId] = cloudKeyroadSidePoses3D->points.size();
+            // 添加因子到图
+            gtSAMgraph.add(priorFactor);
+            mtxGraph.unlock();
+    
+            // 存储路侧位姿点云
+            PointType roadSidePoint;
+            roadSidePoint.x = roadSidePose.translation().x();
+            roadSidePoint.y = roadSidePose.translation().y();
+            roadSidePoint.z = roadSidePose.translation().z();
+            cloudKeyroadSidePoses3D->points.push_back(roadSidePoint);
+    
+            // 触发优化
+            aLoopIsClosed = true;
+            ROS_DEBUG("Added roadside prior to keyframe %lu", currKeyframeId);
+        }
+    }
+
     void addGPSFactor() {
         if (gpsQueue.empty()) return;
 
@@ -2151,6 +2315,10 @@ public:
 
         // gps factor
         if (useGPS) addGPSFactor();
+
+        if (useRoadSide) {
+            addRoadSideFactor();
+        }
 
         // loop factor
         addLoopFactor();

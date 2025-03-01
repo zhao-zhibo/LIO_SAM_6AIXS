@@ -151,6 +151,10 @@ public:
     // 路侧lidar在n系下的位置和姿态
     vector<double> T_nRoadSideV;
     Eigen::Matrix4d T_nRoadSide;
+    float roadTranslationErrorThreshold;
+    float roadRotationErrorThreshold;
+    float toleranceTime;
+    bool debugRoadSide;
 
     // LOAM
     float edgeThreshold; // 边缘点曲率的阈值
@@ -227,6 +231,10 @@ public:
         if (useRoadSide) {
             nh.param<vector<double >>("lio_sam_6axis/T_nRoadSide", T_nRoadSideV, vector<double>());
             T_nRoadSide = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_nRoadSideV.data(), 4, 4);
+            nh.param<float>("lio_sam_6axis/roadtranslationErrorThreshold", roadTranslationErrorThreshold, 1);
+            nh.param<float>("lio_sam_6axis/roadRotationErrorThreshold", roadRotationErrorThreshold, 5.0);
+            nh.param<float>("lio_sam_6axis/toleranceTime", toleranceTime, 0.1);
+            nh.param<bool>("lio_sam_6axis/debugRoadSide", debugRoadSide, false);
         }
         nh.param<bool>("lio_sam_6axis/uesInitialVehiclePose", uesInitialVehiclePose, false);
 
