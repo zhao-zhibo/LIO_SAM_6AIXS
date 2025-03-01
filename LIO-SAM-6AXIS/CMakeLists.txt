@@ -55,6 +55,7 @@ generate_messages(
 )
 
 add_subdirectory(./ThirdParty/GeographicLib/)
+add_subdirectory(./ThirdParty/smallGicp/)
 
 catkin_package(
         INCLUDE_DIRS include
@@ -80,6 +81,14 @@ include_directories(
         ${Y_INCLUDE_DIRS}
         ${LIBXML2_INCLUDE_DIRS}
         ./ThirdParty/GeographicLib/include/
+        ./ThirdParty/smallGicp/include/
+        ./ThirdParty/smallGicp/include/ann
+        ./ThirdParty/smallGicp/include/benchmark
+        ./ThirdParty/smallGicp/include/factors
+        ./ThirdParty/smallGicp/include/pcl
+        ./ThirdParty/smallGicp/include/points
+        ./ThirdParty/smallGicp/include/registration
+        ./ThirdParty/smallGicp/include/util
 )
 
 # link directories
@@ -120,3 +129,16 @@ target_link_libraries(${PROJECT_NAME}_mapOptmization ${catkin_LIBRARIES} ${PCL_L
 # IMU Preintegration
 add_executable(${PROJECT_NAME}_imuPreintegration src/imuPreintegration.cpp)
 target_link_libraries(${PROJECT_NAME}_imuPreintegration ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam ${LIBXML2_LIBRARIES} ${Y_LIBRARIES})
+
+# RoadSide Process
+add_executable(${PROJECT_NAME}_roadSide src/roadSide.cpp)
+add_dependencies(${PROJECT_NAME}_roadSide ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_roadSide ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam ${LIBXML2_LIBRARIES} ${Y_LIBRARIES})
+
+# 插入python文件的执行
+catkin_install_python(PROGRAMS scripts/callAllCommand.py
+                      DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
+# 插入python文件的执行
+catkin_install_python(PROGRAMS scripts/plotHessian.py
+                      DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

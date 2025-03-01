@@ -4,7 +4,7 @@
     <arg name="sequence" default="hkust_campus"/>
 
     <!--set your own Parameters -->
-    <rosparam file="$(find lio_sam_6axis)/config/GREAT_ourdata.yaml" command="load"/>
+    <rosparam file="$(find lio_sam_6axis)/config/GREAT_ourdata_mems.yaml" command="load"/>
 
     <!--- LOAM -->
     <param name="saveDirectory" type="string" value="$(find lio_sam_6axis)/data/"/>

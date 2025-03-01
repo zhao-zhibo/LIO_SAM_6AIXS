@@ -349,7 +349,6 @@ public:
         // get timestamp
         cloudHeader = currentCloudMsg.header;
         timeScanCur = cloudHeader.stamp.toSec();
-        // timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
         timeScanEnd = timeScanCur + laserCloudIn->points.back().time;
 
         if (debugLidarTimestamp) {
@@ -357,7 +356,7 @@ public:
                       << laserCloudIn->points.back().time
                       << ", " << laserCloudIn->points.size() << std::endl;
         }
-	vector<int> indices;
+	    vector<int> indices;
         pcl::removeNaNFromPointCloud(*laserCloudIn, *laserCloudIn, indices);
         // check dense flag
         if (laserCloudIn->is_dense == false) {

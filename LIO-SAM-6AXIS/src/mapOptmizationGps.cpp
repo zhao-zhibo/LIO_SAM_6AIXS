@@ -24,6 +24,15 @@
 #include "lio_sam_6axis/cloud_info.h"
 #include "lio_sam_6axis/save_map.h"
 #include "utility.h"
+#include "std_msgs/Float32MultiArray.h"
+#include <iostream>
+#include <sstream>
+#include <cstdio>
+#include <string>
+#include <ros/ros.h>
+#include <ros/package.h>
+#include <cmath> // 用于角度转换
+
 
 using namespace gtsam;
 
@@ -81,15 +90,18 @@ public:
     ros::Publisher pubGpsConstraintEdge;
 
     ros::Publisher pubSLAMInfo;
+    ros::Publisher pubHessianMatrix; // 发布开始优化时的第一次的Hessian矩阵
 
     ros::Subscriber subCloud;
     ros::Subscriber subGPS;
+    ros::Subscriber subRoadSide;
     ros::Subscriber subLoop;
 
     ros::ServiceServer srvSaveMap;
 
     std::deque<nav_msgs::Odometry> gpsQueue;
-    lio_sam_6axis::cloud_info cloudInfo;
+    std::deque<nav_msgs::Odometry> roadSideQueue;
+    lio_sam_6axis::cloud_info cloudInfo; // 从laserCloudInfoHandler进行赋值，接入的话题是lio_sam_6axis/feature/cloud_info。
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
@@ -105,6 +117,7 @@ public:
 
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointType>::Ptr cloudKeyGPSPoses3D;
+    pcl::PointCloud<PointType>::Ptr cloudKeyroadSidePoses3D;
     pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses2D;
@@ -163,7 +176,7 @@ public:
     int lastLoopIndex = -1;
 
     ros::Time timeLaserInfoStamp;
-    double timeLaserInfoCur;
+    double timeLaserInfoCur; // 当前处理帧的时间戳
     // double timeStampInitial;
 
     float transformTobeMapped[6];
@@ -171,6 +184,7 @@ public:
     std::mutex mtx;
     std::mutex mtxLoopInfo;
     std::mutex mtxGpsInfo;
+    std::mutex mtxRoadSideInfo;
     std::mutex mtxGraph;
 
     // Eigen::Affine3f transGPS;
@@ -192,6 +206,7 @@ public:
     bool aLoopIsClosed = false;
     map<int, int> loopIndexContainer;  // from new to old
     map<int, int> gpsIndexContainer;   // from new to old
+    map<int, int> roadIndexContainer;   // 记录因子索引 (关键帧ID -> roadsidePoses索引
     vector<pair<int, int>> loopIndexQueue;
     vector<gtsam::Pose3> loopPoseQueue;
     vector<gtsam::noiseModel::Diagonal::shared_ptr> loopNoiseQueue;
@@ -238,6 +253,10 @@ public:
                 "gps_odom", 200, &mapOptimization::gpsHandler, this,
                 ros::TransportHints().tcpNoDelay());
 
+        subRoadSide = nh.subscribe<nav_msgs::Odometry>(
+                    "roadSide_odom", 200, &mapOptimization::RoadSideHandler, this,
+                    ros::TransportHints().tcpNoDelay());
+
         subLoop = nh.subscribe<std_msgs::Float64MultiArray>(
                 "lio_loop/loop_closure_detection", 1, &mapOptimization::loopInfoHandler,
                 this, ros::TransportHints().tcpNoDelay());
@@ -263,6 +282,8 @@ public:
 
         pubSLAMInfo = nh.advertise<lio_sam_6axis::cloud_info>(
                 "lio_sam_6axis/mapping/slam_info", 1);
+
+        pubHessianMatrix = nh.advertise<std_msgs::Float32MultiArray>("lio_sam_6axis/mapping/hessian_matrix", 50);
 
         downSizeFilterCorner.setLeafSize(
                 mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
@@ -368,17 +389,17 @@ public:
 
             if (systemInitialized) {
                 extractSurroundingKeyFrames();
-
+                // 对当前帧进行下采样
                 downsampleCurrentScan();
-
+                // 当前帧和地图进行匹配
                 scan2MapOptimization();
-
+                // 根据配准结果确定当前是否为关键帧
                 saveKeyFramesAndFactor();
-
+                // 调整全局的轨迹
                 correctPoses();
-
+                // 将lidar里程计的信息发送出去
                 publishOdometry();
-
+                // 发布可视化点云信息
                 publishFrames();
             }
         }
@@ -389,6 +410,15 @@ public:
             mtxGpsInfo.lock();
             gpsQueue.push_back(*gpsMsg);
             mtxGpsInfo.unlock();
+        }
+    }
+
+
+    void RoadSideHandler(const nav_msgs::Odometry::ConstPtr &roadSideMsg) {
+        if (uesInitialVehiclePose) {
+            mtxRoadSideInfo.lock();
+            roadSideQueue.push_back(*roadSideMsg);
+            mtxRoadSideInfo.unlock();
         }
     }
 
@@ -502,6 +532,44 @@ public:
             return true;
         else
             return false;
+    }
+
+    bool syncRoadSide(std::deque<nav_msgs::Odometry>& queue, 
+                    nav_msgs::Odometry& syncedData,
+                    const double& timestamp, 
+                    const double& timeTol) {
+        bool hasRoadSide = false;
+        
+        while (!queue.empty()) {
+            // 每次操作队列前加锁
+            mtxRoadSideInfo.lock();
+            
+            if (queue.front().header.stamp.toSec() < timestamp - timeTol) {
+                // 丢弃过时数据
+                queue.pop_front();
+                mtxRoadSideInfo.unlock();
+            } 
+            else if (queue.front().header.stamp.toSec() > timestamp + timeTol) {
+                // 保留未来数据
+                mtxRoadSideInfo.unlock();
+                break;
+            } 
+            else {
+                // 时间匹配的数据,最终保证数据时间在timestamp-tol~timestamp+tol之间，也就是前后0.2秒之内(timeTol默认给的是0.1，这个值可能有点大)
+                hasRoadSide = true;
+                syncedData = queue.front();
+                queue.pop_front();
+                
+                // 调试日志 (按需启用)
+                if (debugRoadSide) 
+                    ROS_INFO("RoadSide time offset %f", syncedData.header.stamp.toSec() - timestamp);
+                
+                mtxRoadSideInfo.unlock();
+                break;
+            }
+        }
+        
+        return hasRoadSide;
     }
 
     bool saveMapService(std_srvs::Empty::Request &req,
@@ -750,12 +818,13 @@ public:
     }
 
     void loopClosureThread() {
+        // 如果不需要进行回环检测，则直接返回
         if (loopClosureEnableFlag == false) return;
 
         ros::Rate rate(loopClosureFrequency);
         while (ros::ok()) {
             ros::spinOnce();
-
+            // 执行回环检测
             performLoopClosure();
             visualizeLoopClosure();
 
@@ -787,6 +856,7 @@ public:
         int loopKeyCur;
         int loopKeyPre;
         if (detectLoopClosureExternal(&loopKeyCur, &loopKeyPre) == false)
+            // 根据里程计的距离来检测回环
             if (detectLoopClosureDistance(&loopKeyCur, &loopKeyPre) == false) return;
 
         // extract cloud
@@ -841,16 +911,19 @@ public:
         // transform from world origin to wrong pose
         Eigen::Affine3f tWrong =
                 pclPointToAffine3f(copy_cloudKeyPoses6D->points[loopKeyCur]);
-        // transform from world origin to corrected pose
+        // transform from world origin to corrected pose  修正后的当前帧的位姿
         Eigen::Affine3f tCorrect =
                 correctionLidarFrame *
                 tWrong;  // pre-multiplying -> successive rotation about a fixed frame
         pcl::getTranslationAndEulerAngles(tCorrect, x, y, z, roll, pitch, yaw);
+        // 当前修正后的位姿，给转换成了gtsam的格式
         gtsam::Pose3 poseFrom =
                 Pose3(Rot3::RzRyRx(roll, pitch, yaw), Point3(x, y, z));
+        // 回环帧的位姿，也就是之前的位姿
         gtsam::Pose3 poseTo =
                 pclPointTogtsamPose3(copy_cloudKeyPoses6D->points[loopKeyPre]);
         gtsam::Vector Vector6(6);
+        // icp的得分作为它的噪声
         float noiseScore = icp.getFitnessScore();
         Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore,
                 noiseScore;
@@ -864,7 +937,7 @@ public:
         loopNoiseQueue.push_back(constraintNoise);
         mtx.unlock();
 
-        // add loop constriant
+        // add loop constriant 保存已经配对的约束对
         loopIndexContainer[loopKeyCur] = loopKeyPre;
         lastLoopIndex = loopKeyCur;
     }
@@ -935,6 +1008,7 @@ public:
 
     bool detectLoopClosureExternal(int *latestID, int *closestID) {
         // this function is not used yet, please ignore it
+        // 作者说这个函数还没有使用，所以请忽略
         int loopKeyCur = -1;
         int loopKeyPre = -1;
 
@@ -1124,8 +1198,57 @@ public:
         pubGpsConstraintEdge.publish(markerArray);
     }
 
+    // 调用python脚本获取指定时间戳的位姿变换矩阵
+    /**
+     * @brief 调用Python脚本获取指定时间戳的4x4变换矩阵
+     * @param timestamp 输入时间戳
+     * @return Eigen::Matrix4d 4x4齐次变换矩阵（直接可用作位姿变换）
+     */
+    Eigen::Matrix4d GetTransformFromPython(double timestamp) {
+        Eigen::Matrix4d transform = Eigen::Matrix4d::Identity(); // 默认返回单位矩阵
+        
+        // 获取ROS包路径
+        std::string package_path = ros::package::getPath("lio_sam_6axis");
+        std::string script_path = package_path + "/scripts/GetInitialnTransForm.py";
+        
+        // 构建执行命令
+        std::string cmd = "python3 " + script_path + " " + std::to_string(timestamp);
+        ROS_DEBUG("Executing command: %s", cmd.c_str());
+
+        // 执行Python脚本
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            ROS_ERROR("Failed to execute: %s", cmd.c_str());
+            return transform; // 返回单位矩阵作为安全值
+        }
+
+        // 读取并解析输出
+        char buffer[1024];
+        if (fgets(buffer, sizeof(buffer), pipe)) {
+            std::stringstream ss(buffer);
+            try {
+                // 直接填充Eigen矩阵（按行优先）
+                for (int row = 0; row < 4; ++row) {
+                    for (int col = 0; col < 4; ++col) {
+                        double val;
+                        ss >> val;
+                        transform(row, col) = val; // Eigen默认列优先，此处按显式下标操作
+                    }
+                }
+            } catch (const std::exception& e) {
+                ROS_ERROR("Matrix parsing failed: %s", e.what());
+                transform.setIdentity();
+            }
+        } else {
+            ROS_WARN("No output from Python script");
+        }
+
+        pclose(pipe);
+        return transform;
+    }
+    // 将上一帧lidar最优估计的位姿(transformTobeMapped)转换到了当前帧lidar位姿，这个位姿后面要拿来作为当前帧的初始位姿
     void updateInitialGuess() {
-        // save current transformation before any processing
+        // save current transformation before any processing  上一帧isam优化后的最佳位姿
         incrementalOdometryAffineFront = trans2Affine3f(transformTobeMapped);
         static Eigen::Affine3f lastImuTransformation;
 
@@ -1198,11 +1321,39 @@ public:
                     systemInitialized = true;
                     ROS_WARN("GPS init success");
                 }
-            } else {
+            } else if(uesInitialVehiclePose) {
+                // 如果使用车辆的初始位姿，那么就将车辆的初始位姿作为第一帧的位姿，然后就去调用python脚本找到第一帧的位姿
+                // 获取Python脚本返回的初始变换矩阵
+                Eigen::Matrix4d InitialTransform = GetTransformFromPython(timeLaserInfoCur);
+
+                // 提取平移量 (x, y, z)
+                double x = InitialTransform(0, 3);
+                double y = InitialTransform(1, 3);
+                double z = InitialTransform(2, 3);
+                // 提取旋转矩阵并转换为欧拉角 (roll, pitch, yaw)
+                Eigen::Matrix3d R = InitialTransform.block<3, 3>(0, 0);
+                Eigen::Vector3d euler_angles = R.eulerAngles(2, 1, 0); // ZYX顺序: yaw(Z), pitch(Y), roll(X)
+                double roll = euler_angles[2];  // 对应绕X轴旋转
+                double pitch = euler_angles[1]; // 对应绕Y轴旋转
+                double yaw = euler_angles[0];   // 对应绕Z轴旋转
+                // 将欧拉角赋值给transformTobeMapped  下面这个姿态角还未进行校验，不确定和真值的姿态角的旋转顺序是否一致。
+                transformTobeMapped[0] = roll;   // 绕X轴
+                transformTobeMapped[1] = pitch;  // 绕Y轴
+                transformTobeMapped[2] = yaw;    // 绕Z轴
+                // 将平移量赋值给transformTobeMapped (假设索引3-5对应x,y,z)
+                transformTobeMapped[3] = x;
+                transformTobeMapped[4] = y;
+                transformTobeMapped[5] = z;
+
+                lastImuTransformation = pcl::getTransformation(x, y, z, roll, pitch, yaw);
+                systemInitialized = true;
+                return;
+            }
+            else {
                 transformTobeMapped[0] = cloudInfo.imuRollInit;
                 transformTobeMapped[1] = cloudInfo.imuPitchInit;
                 transformTobeMapped[2] = cloudInfo.imuYawInit;
-
+                // 这里认为默认不使用yaw角，将yaw置为0
                 if (!useImuHeadingInitialization) transformTobeMapped[2] = 0;
 
                 lastImuTransformation = pcl::getTransformation(
@@ -1212,6 +1363,7 @@ public:
                 systemInitialized = true;
                 return;
             }
+
         }
 
         if (!systemInitialized) {
@@ -1223,6 +1375,7 @@ public:
         // use imu pre-integration estimation for pose guess
         static bool lastImuPreTransAvailable = false;
         static Eigen::Affine3f lastImuPreTransformation;
+        // 预积分节点提供的里程计信息
         if (cloudInfo.odomAvailable == true) {
             Eigen::Affine3f transBack = pcl::getTransformation(
                     cloudInfo.initialGuessX, cloudInfo.initialGuessY,
@@ -1232,17 +1385,21 @@ public:
                 lastImuPreTransformation = transBack;
                 lastImuPreTransAvailable = true;
             } else {
+                // 计算上一个预积分的位姿和当前预积分的位姿之间的delta pose，也就是两个关键帧之间的位姿变换transIncre
                 Eigen::Affine3f transIncre =
                         lastImuPreTransformation.inverse() * transBack;
+                // 上一个lidar关键帧的位姿估计，这个位姿估计很准确
                 Eigen::Affine3f transTobe = trans2Affine3f(transformTobeMapped);
+                // 得到当前关键帧的先验估计位姿
                 Eigen::Affine3f transFinal = transTobe * transIncre;
+                // 将先验位姿估计转换成平移和欧拉角
                 pcl::getTranslationAndEulerAngles(
                         transFinal, transformTobeMapped[3], transformTobeMapped[4],
                         transformTobeMapped[5], transformTobeMapped[0],
                         transformTobeMapped[1], transformTobeMapped[2]);
-
+                // 将当前帧的预积分位姿保存下来，方便下次使用
                 lastImuPreTransformation = transBack;
-
+                // 虽然有lidar里程计，但是还是将磁力计的姿态角给保存下来了
                 lastImuTransformation = pcl::getTransformation(
                         0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit,
                         cloudInfo.imuYawInit);  // save imu before return;
@@ -1251,6 +1408,7 @@ public:
         }
 
         // use imu incremental estimation for pose guess (only rotation)
+        // 如果没有imu的预积分里程计的信息，就使用imu的旋转信息来更新，作者认为单独使用imu无法得到靠谱的平移信息，因此平移置为0
         if (cloudInfo.imuAvailable == true) {
             Eigen::Affine3f transBack =
                     pcl::getTransformation(0, 0, 0, cloudInfo.imuRollInit,
@@ -1342,6 +1500,7 @@ public:
                 *laserCloudSurfFromMap += laserCloudMapContainer[thisKeyInd].second;
             } else {
                 // transformed cloud not available
+                // 如果这个点云没有存储，那就需要将该帧对应的位姿，把该帧点云从当前帧的位姿转换到世界坐标系下
                 pcl::PointCloud<PointType> laserCloudCornerTemp =
                         *transformPointCloud(cornerCloudKeyFrames[thisKeyInd],
                                              &cloudKeyPoses6D->points[thisKeyInd]);
@@ -1350,6 +1509,7 @@ public:
                                              &cloudKeyPoses6D->points[thisKeyInd]);
                 *laserCloudCornerFromMap += laserCloudCornerTemp;
                 *laserCloudSurfFromMap += laserCloudSurfTemp;
+                // 把转换后的面点和角点存到这个容器中，存储的是面点和角点的指针，方便后续直接加入点云地图使用。
                 laserCloudMapContainer[thisKeyInd] =
                         make_pair(laserCloudCornerTemp, laserCloudSurfTemp);
             }
@@ -1620,20 +1780,55 @@ public:
                   false);
     }
 
-    bool LMOptimization(int iterCount) {
-        // This optimization is from the original loam_velodyne by Ji Zhang, need to
-        // cope with coordinate transformation lidar <- camera      ---     camera
-        // <- lidar x = z                ---     x = y y = x                --- y =
-        // z z = y                ---     z = x roll = yaw           ---     roll =
-        // pitch pitch = roll         ---     pitch = yaw yaw = pitch          ---
-        // yaw = roll
+    // 发布海塞矩阵到python节点，方便接收使用
+    void publishHessianMatrix(cv::Mat mat) {
+        if (mat.type() != CV_32F || mat.rows != 6 || mat.cols != 6) {
+            ROS_ERROR("Matrix must be 6x6 with type CV_32F.");
+            return;
+        }
 
-        // lidar -> camera
-        float srx = sin(transformTobeMapped[1]);
+        std_msgs::Float32MultiArray matrix_msg;
+        matrix_msg.layout.dim.push_back(std_msgs::MultiArrayDimension());
+        matrix_msg.layout.dim[0].label = "rows";
+        matrix_msg.layout.dim[0].size = mat.rows;
+        matrix_msg.layout.dim[0].stride = mat.rows * mat.cols;
+
+        matrix_msg.layout.dim.push_back(std_msgs::MultiArrayDimension());
+        matrix_msg.layout.dim[1].label = "cols";
+        matrix_msg.layout.dim[1].size = mat.cols;
+        matrix_msg.layout.dim[1].stride = mat.cols;
+
+        matrix_msg.data.resize(mat.rows * mat.cols);
+        for (int i = 0; i < mat.rows; ++i) {
+            for (int j = 0; j < mat.cols; ++j) {
+                matrix_msg.data[i * mat.cols + j] = mat.at<float>(i, j);
+            }
+        }
+
+        // 时间戳单位为秒，乘以1e4，因为data_offset类型为uint32_t，即为无符号整型
+        matrix_msg.layout.data_offset = timeLaserInfoStamp.toSec() * 1e4;
+
+        pubHessianMatrix.publish(matrix_msg);
+    }
+
+
+    bool LMOptimization(int iterCount) {
+        // 原始的loam代码是将lidar坐标系转到相机坐标系，这里把原先loam中的代码拷贝了过来，但是为了坐标系的统一，就先转到相机系优化，然后结果转回lidar系
+        // This optimization is from the original loam_velodyne by Ji Zhang, need to cope with coordinate transformation
+        // lidar <- camera      ---     camera <- lidar
+        // x = z                ---     x = y
+        // y = x                ---     y = z
+        // z = y                ---     z = x
+        // roll = yaw           ---     roll = pitch
+        // pitch = roll         ---     pitch = yaw
+        // yaw = pitch          ---     yaw = roll
+
+        // lidar -> camera 将lidar系转到相机系
+        float srx = sin(transformTobeMapped[1]); // transformTobeMapped[1]为lidar坐标系下的y pitch角
         float crx = cos(transformTobeMapped[1]);
-        float sry = sin(transformTobeMapped[2]);
+        float sry = sin(transformTobeMapped[2]); // transformTobeMapped[2]为ldiar坐标系下的z  yaw角
         float cry = cos(transformTobeMapped[2]);
-        float srz = sin(transformTobeMapped[0]);
+        float srz = sin(transformTobeMapped[0]); // transformTobeMapped[0]为lidar坐标系下的x roll角
         float crz = cos(transformTobeMapped[0]);
 
         int laserCloudSelNum = laserCloudOri->size();
@@ -1641,9 +1836,9 @@ public:
             return false;
         }
 
-        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0));
-        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0));
+        cv::Mat matA(laserCloudSelNum, 6, CV_32F, cv::Scalar::all(0));  // A,也就是雅可比矩阵
+        cv::Mat matAt(6, laserCloudSelNum, CV_32F, cv::Scalar::all(0)); // A的转置
+        cv::Mat matAtA(6, 6, CV_32F, cv::Scalar::all(0)); // 海塞矩阵，就是A的转置乘以A
         cv::Mat matB(laserCloudSelNum, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matAtB(6, 1, CV_32F, cv::Scalar::all(0));
         cv::Mat matX(6, 1, CV_32F, cv::Scalar::all(0));
@@ -1661,6 +1856,8 @@ public:
             coeff.z = coeffSel->points[i].x;
             coeff.intensity = coeffSel->points[i].intensity;
             // in camera
+            // 相机系下的旋转顺序是Y - X - Z对应lidar系下Z -Y -X
+            // camera中的roll横滚角(对应camera的arx，因为roll的定义是横滚角，定义就是绕x轴旋转),对应lidar中的pitch
             float arx = (crx * sry * srz * pointOri.x + crx * crz * sry * pointOri.y -
                          srx * sry * pointOri.z) *
                         coeff.x +
@@ -1669,8 +1866,8 @@ public:
                         coeff.y +
                         (crx * cry * srz * pointOri.x + crx * cry * crz * pointOri.y -
                          cry * srx * pointOri.z) *
-                        coeff.z;
-
+                        coeff.z; // 关于roll的导数
+            // camera中的pitch俯仰角(对应camera的ary，pitch的定义就是绕y轴旋转),对应lidar中的yaw
             float ary = ((cry * srx * srz - crz * sry) * pointOri.x +
                          (sry * srz + cry * crz * srx) * pointOri.y +
                          crx * cry * pointOri.z) *
@@ -1679,7 +1876,7 @@ public:
                          (cry * srz - crz * srx * sry) * pointOri.y -
                          crx * sry * pointOri.z) *
                         coeff.z;
-
+            // camera中的yaw航向角(对应camera中的arz，yaw的定义就是绕z轴旋转),对应lidar中的roll
             float arz = ((crz * srx * sry - cry * srz) * pointOri.x +
                          (-cry * crz - srx * sry * srz) * pointOri.y) *
                         coeff.x +
@@ -1688,26 +1885,28 @@ public:
                          (crz * sry - cry * srx * srz) * pointOri.y) *
                         coeff.z;
             // camera -> lidar
-            matA.at<float>(i, 0) = arz;
-            matA.at<float>(i, 1) = arx;
-            matA.at<float>(i, 2) = ary;
-            matA.at<float>(i, 3) = coeff.z;
-            matA.at<float>(i, 4) = coeff.x;
-            matA.at<float>(i, 5) = coeff.y;
+            matA.at<float>(i, 0) = arz; // matA(i, 0)为lidar坐标系下的雅可比矩阵中的x，即为lidar系下的roll
+            matA.at<float>(i, 1) = arx; // matA(i, 1)为lidar坐标系下的雅可比矩阵中的y,即为lidarx系下的pitch
+            matA.at<float>(i, 2) = ary; // matA(i, 2)为lidar坐标系下的雅可比矩阵中的z,即为lidar系下的yaw
+            matA.at<float>(i, 3) = coeff.z; // 雅可比矩阵中的x
+            matA.at<float>(i, 4) = coeff.x; // 雅可比矩阵中的y
+            matA.at<float>(i, 5) = coeff.y; // 雅可比矩阵中的z
             matB.at<float>(i, 0) = -coeff.intensity;
         }
 
         cv::transpose(matA, matAt);
-        matAtA = matAt * matA;
+        matAtA = matAt * matA; // matAtA为海塞矩阵，对应的特征值分别是roll,pitch,yaw,x,y,z方向的特征值
         matAtB = matAt * matB;
         cv::solve(matAtA, matAtB, matX, cv::DECOMP_QR);
 
         if (iterCount == 0) {
+            // 判断是否退化是在第一次迭代里面发生的，发布第一次的海塞矩阵到话题中
+            publishHessianMatrix(matAtA);
             cv::Mat matE(1, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV(6, 6, CV_32F, cv::Scalar::all(0));
             cv::Mat matV2(6, 6, CV_32F, cv::Scalar::all(0));
 
-            cv::eigen(matAtA, matE, matV);
+            cv::eigen(matAtA, matE, matV); // 对应的特征值分别是roll,pitch,yaw,x,y,z方向的特征值
             matV.copyTo(matV2);
 
             isDegenerate = false;
@@ -1809,7 +2008,7 @@ public:
                 constraintTransformation(transformTobeMapped[1], rotation_tollerance);
         transformTobeMapped[5] =
                 constraintTransformation(transformTobeMapped[5], z_tollerance);
-
+        // scan2map的优化后，存储的结果
         incrementalOdometryAffineBack = trans2Affine3f(transformTobeMapped);
     }
 
@@ -1827,12 +2026,16 @@ public:
             if (timeLaserInfoCur - cloudKeyPoses6D->back().time > 1.0) return true;
         }
 
+        // 取出上一个关键帧的位姿
         Eigen::Affine3f transStart = pclPointToAffine3f(cloudKeyPoses6D->back());
+        // 取出当前帧的位姿转换成eigen形式
         Eigen::Affine3f transFinal = pcl::getTransformation(
                 transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5],
                 transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
+        // 计算上一个关键帧和当前关键帧之间的位姿差
         Eigen::Affine3f transBetween = transStart.inverse() * transFinal;
         float x, y, z, roll, pitch, yaw;
+        // 把两个相对位姿变换转换成平移和欧拉角
         pcl::getTranslationAndEulerAngles(transBetween, x, y, z, roll, pitch, yaw);
 
         if (abs(roll) < surroundingkeyframeAddingAngleThreshold &&
@@ -1849,28 +2052,116 @@ public:
 
     void addOdomFactor() {
         if (cloudKeyPoses3D->points.empty()) {
+            // 第一个关键帧的先验置信度
             noiseModel::Diagonal::shared_ptr priorNoise =
                     noiseModel::Diagonal::Variances(
                             (Vector(6) << 1e-2, 1e-2, M_PI * M_PI, 1e8, 1e8, 1e8)
                                     .finished());  // rad*rad, meter*meter
-
+            // 增加先验约束，对第0个节点增加约束
             gtSAMgraph.add(PriorFactor<Pose3>(0, trans2gtsamPose(transformTobeMapped),
                                               priorNoise));
+            // 加入节点信息
             initialEstimate.insert(0, trans2gtsamPose(transformTobeMapped));
         } else {
+            // 如果不是第一个关键帧，就增加帧间约束，此时帧间约束的置信度较高
             noiseModel::Diagonal::shared_ptr odometryNoise =
                     noiseModel::Diagonal::Variances(
                             (Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished());
-            gtsam::Pose3 poseFrom =
-                    pclPointTogtsamPose3(cloudKeyPoses6D->points.back());
+            // poseFrom为最后一个关键帧的位姿，poseTo为当前关键帧通过scantoMap计算的位姿
+            gtsam::Pose3 poseFrom = pclPointTogtsamPose3(cloudKeyPoses6D->points.back());
             gtsam::Pose3 poseTo = trans2gtsamPose(transformTobeMapped);
 
             mtxGraph.lock();
+            // 这是一个帧间约束，分别输入两个节点的id，帧间约束大小以及置信度
             gtSAMgraph.add(BetweenFactor<Pose3>(
                     cloudKeyPoses3D->size() - 1, cloudKeyPoses3D->size(),
                     poseFrom.between(poseTo), odometryNoise));
             initialEstimate.insert(cloudKeyPoses3D->size(), poseTo);
             mtxGraph.unlock();
+        }
+    }
+
+    void addRoadSideFactor() {
+        if (roadSideQueue.empty()) 
+            return;
+
+        // 系统初始化检查
+        if (cloudKeyPoses3D->points.empty())
+            return;
+
+        // 时间同步
+        nav_msgs::Odometry thisRoadSide;
+        if (syncRoadSide(roadSideQueue, thisRoadSide, timeLaserInfoCur, toleranceTime)) {
+            // 提取协方差参数
+            const float noise_x = thisRoadSide.pose.covariance[0];
+            const float noise_y = thisRoadSide.pose.covariance[7];
+            const float noise_z = thisRoadSide.pose.covariance[14];
+            const float noise_roll = thisRoadSide.pose.covariance[21];
+            const float noise_pitch = thisRoadSide.pose.covariance[28];
+            const float noise_yaw = thisRoadSide.pose.covariance[35];
+    
+            // 转换旋转阈值为弧度
+            const double ROT_THRES_RAD = roadRotationErrorThreshold * M_PI / 180.0; // 度转弧度
+    
+            // 噪声阈值检查
+            if (noise_x > roadTranslationErrorThreshold || 
+                noise_y > roadTranslationErrorThreshold || 
+                noise_z > roadTranslationErrorThreshold ||
+                noise_roll > ROT_THRES_RAD || 
+                noise_pitch > ROT_THRES_RAD || 
+                noise_yaw > ROT_THRES_RAD) {
+                ROS_WARN("Roadside noise exceeds threshold (trans: %.2fm, rot: %.1fdeg), skipped.", 
+                        roadTranslationErrorThreshold, roadRotationErrorThreshold);
+                return;
+            }
+    
+            // 转换为位姿
+            Eigen::Isometry3d roadSidePose = Eigen::Isometry3d::Identity();
+            roadSidePose.translation() << 
+                thisRoadSide.pose.pose.position.x,
+                thisRoadSide.pose.pose.position.y,
+                thisRoadSide.pose.pose.position.z;
+            roadSidePose.linear() = Eigen::Quaterniond(
+                thisRoadSide.pose.pose.orientation.w,
+                thisRoadSide.pose.pose.orientation.x,
+                thisRoadSide.pose.pose.orientation.y,
+                thisRoadSide.pose.pose.orientation.z
+            ).toRotationMatrix();
+    
+            // 转换为GTSAM格式
+            const gtsam::Pose3 pose3(
+                gtsam::Rot3(roadSidePose.linear()), 
+                gtsam::Point3(roadSidePose.translation())
+            );
+    
+            // 构建噪声模型
+            gtsam::Vector6 noiseVec6;
+            noiseVec6 << noise_x, noise_y, noise_z, noise_roll, noise_pitch, noise_yaw;
+            gtsam::noiseModel::Diagonal::shared_ptr noiseModel = 
+                gtsam::noiseModel::Diagonal::Variances(noiseVec6);
+    
+            // 创建先验因子
+            const size_t currKeyframeId = cloudKeyPoses3D->size();
+            gtsam::PriorFactor<gtsam::Pose3> priorFactor(currKeyframeId, pose3, noiseModel);
+    
+            // 存储到容器
+            mtxGraph.lock();
+            // 记录因子索引 (关键帧ID -> roadsidePoses索引)
+            roadIndexContainer[currKeyframeId] = cloudKeyroadSidePoses3D->points.size();
+            // 添加因子到图
+            gtSAMgraph.add(priorFactor);
+            mtxGraph.unlock();
+    
+            // 存储路侧位姿点云
+            PointType roadSidePoint;
+            roadSidePoint.x = roadSidePose.translation().x();
+            roadSidePoint.y = roadSidePose.translation().y();
+            roadSidePoint.z = roadSidePose.translation().z();
+            cloudKeyroadSidePoses3D->points.push_back(roadSidePoint);
+    
+            // 触发优化
+            aLoopIsClosed = true;
+            ROS_DEBUG("Added roadside prior to keyframe %lu", currKeyframeId);
         }
     }
 
@@ -1910,7 +2201,7 @@ public:
             double gps_x = 0.0, gps_y = 0.0, gps_z = 0.0;
             Eigen::Vector3d LLA(thisGPS.pose.covariance[1], thisGPS.pose.covariance[2], thisGPS.pose.covariance[3]);
             geo_converter.Forward(LLA[0], LLA[1], LLA[2], gps_x, gps_y, gps_z);
-
+            // 考虑是否使用GPS的高度信息
             if (!useGpsElevation) {
                 gps_z = transformTobeMapped[5];
                 noise_z = 0.01;
@@ -1988,11 +2279,13 @@ public:
                 gpsIndexContainer[cloudKeyPoses3D->size()] =
                         cloudKeyGPSPoses3D->size() - 1;
             }
+            // 加入gps之后等同于回环，需要触发较多的isam update
             aLoopIsClosed = true;
         }
     }
 
     void addLoopFactor() {
+        // 有一个专门的回环检测线程会检测回环，检测到就会给这个队列塞入回环结果
         if (loopIndexQueue.empty()) return;
 
         for (int i = 0; i < (int) loopIndexQueue.size(); ++i) {
@@ -2006,9 +2299,11 @@ public:
             mtxGraph.unlock();
         }
 
+        // 清空回环相关的队列
         loopIndexQueue.clear();
         loopPoseQueue.clear();
         loopNoiseQueue.clear();
+        // 回环的标志位置为true
         aLoopIsClosed = true;
     }
 
@@ -2020,6 +2315,10 @@ public:
 
         // gps factor
         if (useGPS) addGPSFactor();
+
+        if (useRoadSide) {
+            addRoadSideFactor();
+        }
 
         // loop factor
         addLoopFactor();
@@ -2037,6 +2336,7 @@ public:
         isam->update(gtSAMgraph, initialEstimate);
         isam->update();
 
+        // 如果加入了gps约束或者回环约束，就需要多次更新isam
         if (aLoopIsClosed == true) {
             isam->update();
             isam->update();
@@ -2044,16 +2344,17 @@ public:
             isam->update();
             isam->update();
         }
-
+        // 将约束和节点信息清空，他们已经加入到isam中了，因此清空不会影响整个优化
         gtSAMgraph.resize(0);
         initialEstimate.clear();
 
-        // save key poses
+        // save key poses 接下来保存关键帧信息
         PointType thisPose3D;
         PointTypePose thisPose6D;
         Pose3 latestEstimate;
 
         isamCurrentEstimate = isam->calculateEstimate();
+        // 当前关键帧优化后的位姿
         latestEstimate =
                 isamCurrentEstimate.at<Pose3>(isamCurrentEstimate.size() - 1);
         // cout << "****************************************************" << endl;
@@ -2080,9 +2381,10 @@ public:
         // cout << "Pose covariance:" << endl;
         // cout << isam->marginalCovariance(isamCurrentEstimate.size()-1) << endl <<
         // endl;
+        // 保存优化后当前位姿的置信度
         poseCovariance = isam->marginalCovariance(isamCurrentEstimate.size() - 1);
 
-        // save updated transform
+        // save updated transform  将优化后的位姿保存到transformTobeMapped中，作为当前最佳估计值
         transformTobeMapped[0] = latestEstimate.rotation().roll();
         transformTobeMapped[1] = latestEstimate.rotation().pitch();
         transformTobeMapped[2] = latestEstimate.rotation().yaw();
@@ -2097,12 +2399,13 @@ public:
                 new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr thislaserCloudRawKeyFrame(
                 new pcl::PointCloud<PointType>());
+        // 当前帧的点云的角点和面点分别拷贝一下
         pcl::copyPointCloud(*laserCloudCornerLastDS, *thisCornerKeyFrame);
         pcl::copyPointCloud(*laserCloudSurfLastDS, *thisSurfKeyFrame);
 //        pcl::copyPointCloud(*laserCloudRawDS, *thislaserCloudRawKeyFrame);
         pcl::copyPointCloud(*laserCloudRaw, *thislaserCloudRawKeyFrame);
 
-        // save key frame cloud
+        // save key frame cloud  保存关键帧的点云
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
         // if you want to save raw cloud
@@ -2116,22 +2419,24 @@ public:
         //        transformTobeMapped);
         //        keyframePosesOdom.push_back(updatesOdometryROS);
 
-        // save path for visualization
+        // save path for visualization  根据当前最新位姿更新rviz可视化
         updatePath(thisPose6D);
     }
 
     void correctPoses() {
+        // 没有关键帧，自然也没有意义
         if (cloudKeyPoses3D->points.empty()) return;
-
+        // 只有当回环以及gps信息这些会触发，全局调整才会被触发，因为此时对全局的位姿影响比较大，因此需要将之前的位姿全部清空并再重新赋值
         if (aLoopIsClosed == true) {
-            // clear map cache
+            // clear map cache 这里面存储关键帧位姿和关键帧点云
             laserCloudMapContainer.clear();
-            // clear path
+            // clear path  清空path
             globalPath.poses.clear();
 
-            // update key poses
+            // update key poses  更新所有的位姿
             int numPoses = isamCurrentEstimate.size();
             for (int i = 0; i < numPoses; ++i) {
+                // 更新所有关键帧的位姿
                 cloudKeyPoses3D->points[i].x =
                         isamCurrentEstimate.at<Pose3>(i).translation().x();
                 cloudKeyPoses3D->points[i].y =
@@ -2151,7 +2456,7 @@ public:
 
                 updatePath(cloudKeyPoses6D->points[i]);
             }
-
+            // 全局位姿已经调整完成，然后将回环标志位置为false
             aLoopIsClosed = false;
         }
     }
@@ -2201,7 +2506,7 @@ public:
 
         globalPath.poses.push_back(pose_stamped);
     }
-
+    // 将transform转换成laserOdometryROS
     void transformEiegn2Odom(double timestamp,
                              nav_msgs::Odometry &laserOdometryROS,
                              float transform[6]) {
@@ -2286,6 +2591,7 @@ public:
         }
 
         // Publish odometry for ROS (incremental)
+        // 发送增量的位姿变换信息，主要是给imu预积分模块使用的，需要里程计是足够的平滑
         static bool lastIncreOdomPubFlag = false;
         static nav_msgs::Odometry laserOdomIncremental;  // incremental odometry msg
         static Eigen::Affine3f increOdomAffine;  // incremental odometry in affine
@@ -2294,6 +2600,8 @@ public:
             laserOdomIncremental = laserOdometryROS;
             increOdomAffine = trans2Affine3f(transformTobeMapped);
         } else {
+            // 上一帧最佳位姿和当前帧最佳位姿(当前scan2map后的位姿，而不是gps和回环调整后的位姿)之间的位姿增量
+            // 也就是scan2map前后的位姿结果
             Eigen::Affine3f affineIncre = incrementalOdometryAffineFront.inverse() *
                                           incrementalOdometryAffineBack;
             increOdomAffine = increOdomAffine * affineIncre;
@@ -2335,6 +2643,7 @@ public:
             else
                 laserOdomIncremental.pose.covariance[0] = 0;
         }
+        // 回环的信息并不会体现在这里面，只有增量的信息在里面，也就是只发布scan2map的增量信息到imu预积分模块
         pubLaserOdometryIncremental.publish(laserOdomIncremental);
     }
 

@@ -3,6 +3,7 @@ lio_sam_6axis:
   #  velodyne16 and stim300(6 axis)
 
   # 数据在进入隧道600秒左右开始飘了，因此需要在进入隧道前后进行重定位
+  # This is degenerate branch
 
   # Topics
   pointCloudTopic: "/points_raw"               # Point cloud data
@@ -55,11 +56,11 @@ lio_sam_6axis:
   # Extrinsics (lidar -> IMU)
   imu_type: 0   # 0: 6axis, 1:9 axis
   # lidar frame to imu frame  在lidar坐标系下,imu原点的位置
-  extrinsicTrans: [0.02,  -0.25, -0.4]
+  extrinsicTrans: [0.02,  -0.25, -0.2]
   # imu frame to lidar frame
-  extrinsicRot:  [ 0.999817497860517,0.018112103798910352,0.006049795816253419,
-                  -0.018142554229753124,0.9998229728631094,0.005012995213086027,
-                  -0.0059579271855445875,-0.005121833958012544,0.9999694237453087]
+  extrinsicRot:  [ 0.9997323448403929,0.022705511797261574,0.0044010804809598205,
+                  -0.022729623195724833,0.99972664454332,0.005500573400176629,
+                 -0.00427498409522554,-0.005599128814065244,0.9999754811698502]
   extrinsicRPY: [ 1, 0, 0,
                   0, 1, 0,
                   0, 0, 1 ]
@@ -105,7 +106,7 @@ lio_sam_6axis:
 
 
   # mapping
-  globalMapLeafSize: 0.5                        # saved map voxgrid size
+  globalMapLeafSize: 0.3                        # saved map voxgrid size
 
 
 # Navsat (convert GPS coordinates to Cartesian)
