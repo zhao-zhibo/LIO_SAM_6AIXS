@@ -22,7 +22,9 @@
 
 #include "dataSaver.h"
 #include "lio_sam_6axis/cloud_info.h"
+#include "lio_sam_6axis/road_registration.h"
 #include "lio_sam_6axis/save_map.h"
+#include "lio_sam_6axis/transformInterp.h"
 #include "utility.h"
 #include "std_msgs/Float32MultiArray.h"
 #include <iostream>
@@ -91,6 +93,7 @@ public:
 
     ros::Publisher pubSLAMInfo;
     ros::Publisher pubHessianMatrix; // 发布开始优化时的第一次的Hessian矩阵
+    ros::Publisher pubGNSSOriginLLA; // 发布GNSS原点的经纬度信息给路侧节点
 
     ros::Subscriber subCloud;
     ros::Subscriber subGPS;
@@ -98,9 +101,12 @@ public:
     ros::Subscriber subLoop;
 
     ros::ServiceServer srvSaveMap;
+    ros::ServiceClient srvTransformClient;  // [!++ 新增成员变量]
+    std::atomic<bool> serviceAvailable{false};  // [!++ 小驼峰: serviceAvailable]
+    std::thread serviceCheckThread;          // [!++ 小驼峰: serviceCheckThread]
 
     std::deque<nav_msgs::Odometry> gpsQueue;
-    std::deque<nav_msgs::Odometry> roadSideQueue;
+    std::deque<lio_sam_6axis::road_registration> roadRegistrationQueue; // 存储从路侧lidar发回来的关键帧点云配准信息
     lio_sam_6axis::cloud_info cloudInfo; // 从laserCloudInfoHandler进行赋值，接入的话题是lio_sam_6axis/feature/cloud_info。
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
@@ -117,8 +123,8 @@ public:
 
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointType>::Ptr cloudKeyGPSPoses3D;
-    pcl::PointCloud<PointType>::Ptr cloudKeyroadSidePoses3D;
-    pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
+    pcl::PointCloud<PointType>::Ptr cloudKeyroadSidePoses3D; // 存储从路侧点云配准信息中提取的关键帧位姿
+    pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D; // 所有的关键帧6D位姿，里面的光强参数代表索引
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses2D;
     pcl::PointCloud<PointTypePose>::Ptr copy_cloudKeyPoses6D;
@@ -186,10 +192,11 @@ public:
     std::mutex mtxGpsInfo;
     std::mutex mtxRoadSideInfo;
     std::mutex mtxGraph;
+    std::mutex debugKeyFrameMutex;
 
     // Eigen::Affine3f transGPS;
     // Eigen::Vector3d transLLA;
-    Eigen::Vector3d originLLA;
+    Eigen::Vector3d originLLA; // GNSS的原点的位置
     // bool gpsAvialble = false;
     bool systemInitialized = false;
     bool gpsTransfromInit = false;
@@ -206,7 +213,7 @@ public:
     bool aLoopIsClosed = false;
     map<int, int> loopIndexContainer;  // from new to old
     map<int, int> gpsIndexContainer;   // from new to old
-    map<int, int> roadIndexContainer;   // 记录因子索引 (关键帧ID -> roadsidePoses索引
+    map<int, int> roadIndexContainer;   // 记录因子索引 (关键帧ID -> roadsidePoses索引)
     vector<pair<int, int>> loopIndexQueue;
     vector<gtsam::Pose3> loopPoseQueue;
     vector<gtsam::noiseModel::Diagonal::shared_ptr> loopNoiseQueue;
@@ -252,9 +259,9 @@ public:
         subGPS = nh.subscribe<nav_msgs::Odometry>(
                 "gps_odom", 200, &mapOptimization::gpsHandler, this,
                 ros::TransportHints().tcpNoDelay());
-
-        subRoadSide = nh.subscribe<nav_msgs::Odometry>(
-                    "roadSide_odom", 200, &mapOptimization::RoadSideHandler, this,
+        // 订阅路侧lidar配准的结果
+        subRoadSide = nh.subscribe<lio_sam_6axis::road_registration>(
+                    "lio_sam_6axis/roadside/registration", 200, &mapOptimization::RoadSideHandler, this,
                     ros::TransportHints().tcpNoDelay());
 
         subLoop = nh.subscribe<std_msgs::Float64MultiArray>(
@@ -262,6 +269,21 @@ public:
                 this, ros::TransportHints().tcpNoDelay());
         srvSaveMap = nh.advertiseService("lio_sam_6axis/save_map",
                                          &mapOptimization::saveMapService, this);
+
+        srvTransformClient = nh.serviceClient<lio_sam_6axis::transformInterp>("transform_interp_service");
+
+        // 启动异步服务检查线程 [!++]
+        serviceCheckThread = std::thread([this]() {
+            bool success = ros::service::waitForService("transform_interp_service", ros::Duration(3.0));
+            serviceAvailable.store(success);  // [!++ 小驼峰变量]
+            
+            if (success) {
+                ROS_INFO("Transform service connected");
+            } else {
+                ROS_INFO("Transform service unavailable after 3.0 seconds!");
+            }
+        });
+
 
         pubHistoryKeyFrames = nh.advertise<sensor_msgs::PointCloud2>(
                 "lio_sam_6axis/mapping/icp_loop_closure_history_cloud", 1);
@@ -284,6 +306,7 @@ public:
                 "lio_sam_6axis/mapping/slam_info", 1);
 
         pubHessianMatrix = nh.advertise<std_msgs::Float32MultiArray>("lio_sam_6axis/mapping/hessian_matrix", 50);
+        pubGNSSOriginLLA = nh.advertise<geometry_msgs::Vector3>("lio_sam_6axis/mapping/originLLA", 20);
 
         downSizeFilterCorner.setLeafSize(
                 mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
@@ -377,16 +400,16 @@ public:
         cloudInfo = *msgIn;
         pcl::fromROSMsg(msgIn->cloud_corner, *laserCloudCornerLast);
         pcl::fromROSMsg(msgIn->cloud_surface, *laserCloudSurfLast);
-        pcl::fromROSMsg(msgIn->cloud_deskewed, *laserCloudRaw);  // deskewed data
+        pcl::fromROSMsg(msgIn->cloud_deskewed, *laserCloudRaw);  // 当前关键帧经过去畸变的点云
 
         std::lock_guard<std::mutex> lock(mtx);
 
         static double timeLastProcessing = -1;
         if (timeLaserInfoCur - timeLastProcessing >= mappingProcessInterval) {
             timeLastProcessing = timeLaserInfoCur;
-
+            PrintTransformTobeMapped("before updateInitialGuess Finished");
             updateInitialGuess();
-
+            PrintTransformTobeMapped("after updateInitialGuess Finished");
             if (systemInitialized) {
                 extractSurroundingKeyFrames();
                 // 对当前帧进行下采样
@@ -414,11 +437,14 @@ public:
     }
 
 
-    void RoadSideHandler(const nav_msgs::Odometry::ConstPtr &roadSideMsg) {
-        if (uesInitialVehiclePose) {
-            mtxRoadSideInfo.lock();
-            roadSideQueue.push_back(*roadSideMsg);
-            mtxRoadSideInfo.unlock();
+    void RoadSideHandler(const lio_sam_6axis::road_registrationConstPtr &roadSideMsg) {
+        if (useRoadSide) {
+            std::lock_guard<std::mutex> lock(mtxRoadSideInfo);
+            roadRegistrationQueue.push_back(*roadSideMsg);
+            if (debugRoadSide) {
+                ROS_INFO("[roadRegistrationQueue] size : %d", roadRegistrationQueue.size());
+            }
+            
         }
     }
 
@@ -534,44 +560,6 @@ public:
             return false;
     }
 
-    bool syncRoadSide(std::deque<nav_msgs::Odometry>& queue, 
-                    nav_msgs::Odometry& syncedData,
-                    const double& timestamp, 
-                    const double& timeTol) {
-        bool hasRoadSide = false;
-        
-        while (!queue.empty()) {
-            // 每次操作队列前加锁
-            mtxRoadSideInfo.lock();
-            
-            if (queue.front().header.stamp.toSec() < timestamp - timeTol) {
-                // 丢弃过时数据
-                queue.pop_front();
-                mtxRoadSideInfo.unlock();
-            } 
-            else if (queue.front().header.stamp.toSec() > timestamp + timeTol) {
-                // 保留未来数据
-                mtxRoadSideInfo.unlock();
-                break;
-            } 
-            else {
-                // 时间匹配的数据,最终保证数据时间在timestamp-tol~timestamp+tol之间，也就是前后0.2秒之内(timeTol默认给的是0.1，这个值可能有点大)
-                hasRoadSide = true;
-                syncedData = queue.front();
-                queue.pop_front();
-                
-                // 调试日志 (按需启用)
-                if (debugRoadSide) 
-                    ROS_INFO("RoadSide time offset %f", syncedData.header.stamp.toSec() - timestamp);
-                
-                mtxRoadSideInfo.unlock();
-                break;
-            }
-        }
-        
-        return hasRoadSide;
-    }
-
     bool saveMapService(std_srvs::Empty::Request &req,
                         std_srvs::Empty::Response &res) {
         if (cloudKeyPoses6D->size() < 1) {
@@ -587,7 +575,6 @@ public:
             // we save optimized origin gps point
             geo_converter.Reverse(first_point[0], first_point[1], first_point[2], optimized_lla[0], optimized_lla[1],
                                   optimized_lla[2]);
-
             std::cout << std::setprecision(9)
                       << "origin LLA: " << originLLA.transpose() << std::endl;
             std::cout << std::setprecision(9)
@@ -1200,52 +1187,104 @@ public:
 
     // 调用python脚本获取指定时间戳的位姿变换矩阵
     /**
-     * @brief 调用Python脚本获取指定时间戳的4x4变换矩阵
+     * @brief 访问服务并获取指定时间戳的4x4变换矩阵
      * @param timestamp 输入时间戳
      * @return Eigen::Matrix4d 4x4齐次变换矩阵（直接可用作位姿变换）
      */
     Eigen::Matrix4d GetTransformFromPython(double timestamp) {
-        Eigen::Matrix4d transform = Eigen::Matrix4d::Identity(); // 默认返回单位矩阵
-        
-        // 获取ROS包路径
-        std::string package_path = ros::package::getPath("lio_sam_6axis");
-        std::string script_path = package_path + "/scripts/GetInitialnTransForm.py";
-        
-        // 构建执行命令
-        std::string cmd = "python3 " + script_path + " " + std::to_string(timestamp);
-        ROS_DEBUG("Executing command: %s", cmd.c_str());
 
-        // 执行Python脚本
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if (!pipe) {
-            ROS_ERROR("Failed to execute: %s", cmd.c_str());
-            return transform; // 返回单位矩阵作为安全值
-        }
-
-        // 读取并解析输出
-        char buffer[1024];
-        if (fgets(buffer, sizeof(buffer), pipe)) {
-            std::stringstream ss(buffer);
-            try {
-                // 直接填充Eigen矩阵（按行优先）
-                for (int row = 0; row < 4; ++row) {
-                    for (int col = 0; col < 4; ++col) {
-                        double val;
-                        ss >> val;
-                        transform(row, col) = val; // Eigen默认列优先，此处按显式下标操作
-                    }
-                }
-            } catch (const std::exception& e) {
-                ROS_ERROR("Matrix parsing failed: %s", e.what());
-                transform.setIdentity();
+        // 1. 服务可用性检查（建议放在构造函数）
+        if (!srvTransformClient.exists()) {
+            ROS_WARN_THROTTLE(1.0, "Waiting for transform_interp_service...");
+            if (!srvTransformClient.waitForExistence(ros::Duration(2.0))) {
+                ROS_ERROR("Service [transform_interp_service] not available");
+                return Eigen::Matrix4d::Identity();
             }
-        } else {
-            ROS_WARN("No output from Python script");
         }
 
-        pclose(pipe);
-        return transform;
+        lio_sam_6axis::transformInterp srv;
+        srv.request.timestamp = timestamp;
+    
+        const int max_retries = 2;
+        for (int retry = 0; retry < max_retries; ++retry) {  // [!++ 重试max_retries次]
+            try {
+                // 带超时的服务调用
+                if (!srvTransformClient.call(srv)) {
+                    ROS_ERROR_THROTTLE(1.0, "Service call failed (attempt %d/%d)", retry+1, max_retries);
+                    continue;
+                }
+    
+                // 响应数据校验
+                if (srv.response.matrix.size() != 16) {
+                    ROS_ERROR_STREAM("Invalid matrix size: " << srv.response.matrix.size());
+                    return Eigen::Matrix4d::Identity();
+                }
+    
+                // 安全的内存映射（禁用对齐）
+                const Eigen::Map<const Eigen::Matrix<double, 4, 4, Eigen::RowMajor>, Eigen::Unaligned> mat(
+                    srv.response.matrix.data(),
+                    4, 4
+                );
+                return mat;
+    
+            } catch (const ros::Exception& e) {
+                ROS_ERROR_STREAM("ROS exception: " << e.what());
+            } catch (const std::exception& e) {
+                ROS_ERROR_STREAM("System error: " << e.what());
+            } catch (...) {
+                ROS_WARN("Unknown exception during service call");
+            }
+    
+            if (retry < max_retries - 1) {
+                ros::Duration(0.5).sleep();
+            }
+        }
+    
+        ROS_ERROR("All service attempts failed for timestamp: %.3f", timestamp);
+        return Eigen::Matrix4d::Identity();
     }
+    void PublishOriginGNSS(Eigen::Vector3d origin) {
+        geometry_msgs::Vector3 msg;
+        msg.x = origin[0];
+        msg.y = origin[1];
+        msg.z = origin[2];
+        pubGNSSOriginLLA.publish(msg);
+        return;
+    }
+
+    void ComputeTransform(double timestamp, float outputTransform[6]) {
+        auto start = std::chrono::steady_clock::now(); // 开始计时
+        
+        // 通过 ROS 服务（或其他接口）获取对应时间戳的4x4变换矩阵
+        Eigen::Matrix4d InitialTransform = GetTransformFromPython(timestamp);
+
+        tf::Matrix3x3 tfRot;
+        tfRot.setValue(
+            InitialTransform(0, 0), InitialTransform(0, 1), InitialTransform(0, 2),
+            InitialTransform(1, 0), InitialTransform(1, 1), InitialTransform(1, 2),
+            InitialTransform(2, 0), InitialTransform(2, 1), InitialTransform(2, 2)
+        );
+        double roll, pitch, yaw;
+        tfRot.getRPY(roll, pitch, yaw);
+        double x = InitialTransform(0, 3);
+        double y = InitialTransform(1, 3);
+        double z = InitialTransform(2, 3);
+        
+        // 将结果存入输出数组：前3个为旋转，后3个为平移
+        outputTransform[0] = static_cast<float>(roll);
+        outputTransform[1] = static_cast<float>(pitch);
+        outputTransform[2] = static_cast<float>(yaw);
+        outputTransform[3] = static_cast<float>(x);
+        outputTransform[4] = static_cast<float>(y);
+        outputTransform[5] = static_cast<float>(z);
+        
+        auto end = std::chrono::steady_clock::now(); // 结束计时
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+        if (debugInitialVehiclePose) {
+            ROS_INFO_STREAM("ComputeTransform executed in " << duration << " ms");
+        }
+    }
+
     // 将上一帧lidar最优估计的位姿(transformTobeMapped)转换到了当前帧lidar位姿，这个位姿后面要拿来作为当前帧的初始位姿
     void updateInitialGuess() {
         // save current transformation before any processing  上一帧isam优化后的最佳位姿
@@ -1268,7 +1307,8 @@ public:
                     originLLA = Eigen::Vector3d(alignedGPS.pose.covariance[1],
                                                 alignedGPS.pose.covariance[2],
                                                 alignedGPS.pose.covariance[3]);
-                    /** set your map origin points */
+                    PublishOriginGNSS(originLLA);
+                    ROS_INFO_STREAM("[updateInitialGuess] originLLA: " << std::fixed << std::setprecision(9) << originLLA.transpose());                    /** set your map origin points */
                     geo_converter.Reset(originLLA[0], originLLA[1], originLLA[2]);
                     // WGS84->ENU, must be (0,0,0)
                     Eigen::Vector3d enu;
@@ -1322,30 +1362,10 @@ public:
                     ROS_WARN("GPS init success");
                 }
             } else if(uesInitialVehiclePose) {
-                // 如果使用车辆的初始位姿，那么就将车辆的初始位姿作为第一帧的位姿，然后就去调用python脚本找到第一帧的位姿
-                // 获取Python脚本返回的初始变换矩阵
-                Eigen::Matrix4d InitialTransform = GetTransformFromPython(timeLaserInfoCur);
-
-                // 提取平移量 (x, y, z)
-                double x = InitialTransform(0, 3);
-                double y = InitialTransform(1, 3);
-                double z = InitialTransform(2, 3);
-                // 提取旋转矩阵并转换为欧拉角 (roll, pitch, yaw)
-                Eigen::Matrix3d R = InitialTransform.block<3, 3>(0, 0);
-                Eigen::Vector3d euler_angles = R.eulerAngles(2, 1, 0); // ZYX顺序: yaw(Z), pitch(Y), roll(X)
-                double roll = euler_angles[2];  // 对应绕X轴旋转
-                double pitch = euler_angles[1]; // 对应绕Y轴旋转
-                double yaw = euler_angles[0];   // 对应绕Z轴旋转
-                // 将欧拉角赋值给transformTobeMapped  下面这个姿态角还未进行校验，不确定和真值的姿态角的旋转顺序是否一致。
-                transformTobeMapped[0] = roll;   // 绕X轴
-                transformTobeMapped[1] = pitch;  // 绕Y轴
-                transformTobeMapped[2] = yaw;    // 绕Z轴
-                // 将平移量赋值给transformTobeMapped (假设索引3-5对应x,y,z)
-                transformTobeMapped[3] = x;
-                transformTobeMapped[4] = y;
-                transformTobeMapped[5] = z;
-
-                lastImuTransformation = pcl::getTransformation(x, y, z, roll, pitch, yaw);
+                // 通过ros服务获取第一帧的位姿
+                ComputeTransform(timeLaserInfoCur, transformTobeMapped);
+                lastImuTransformation = pcl::getTransformation(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5],
+                    transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
                 systemInitialized = true;
                 return;
             }
@@ -1373,10 +1393,19 @@ public:
 
         // if not the first frame
         // use imu pre-integration estimation for pose guess
+        PrintTransformTobeMapped("before cloudInfo.odomAvailable Finished");
         static bool lastImuPreTransAvailable = false;
+        static int  odomNum = 0;
         static Eigen::Affine3f lastImuPreTransformation;
         // 预积分节点提供的里程计信息
         if (cloudInfo.odomAvailable == true) {
+            if(debugInitialVehiclePose) {
+                odomNum ++;
+                ROS_INFO_STREAM("odomNum call count: " << odomNum);
+                ROS_INFO_STREAM("Initial Guess: roll=" << cloudInfo.initialGuessRoll << " pitch=" << cloudInfo.initialGuessPitch
+                    << " yaw=" << cloudInfo.initialGuessYaw << " x=" << cloudInfo.initialGuessX
+                    << " y=" << cloudInfo.initialGuessY << " z=" << cloudInfo.initialGuessZ);
+            }
             Eigen::Affine3f transBack = pcl::getTransformation(
                     cloudInfo.initialGuessX, cloudInfo.initialGuessY,
                     cloudInfo.initialGuessZ, cloudInfo.initialGuessRoll,
@@ -1403,16 +1432,25 @@ public:
                 lastImuTransformation = pcl::getTransformation(
                         0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit,
                         cloudInfo.imuYawInit);  // save imu before return;
+                PrintTransformTobeMapped("lastImuPreTransAvailable is true, cloudInfo.odomAvailable Finished");
                 return;
             }
         }
+        PrintTransformTobeMapped("lastImuPreTransAvailable is false, cloudInfo.odomAvailable Finished");
 
         // use imu incremental estimation for pose guess (only rotation)
         // 如果没有imu的预积分里程计的信息，就使用imu的旋转信息来更新，作者认为单独使用imu无法得到靠谱的平移信息，因此平移置为0
+        static int  getServiceNum = 0;
         if (cloudInfo.imuAvailable == true) {
+            float initialGuess[6] = {0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit, cloudInfo.imuYawInit}; 
+            if(uesInitialVehiclePose) {
+                ComputeTransform(timeLaserInfoCur, initialGuess);
+                getServiceNum ++;
+                ROS_INFO_STREAM("Service call count: " << getServiceNum);
+            }
             Eigen::Affine3f transBack =
-                    pcl::getTransformation(0, 0, 0, cloudInfo.imuRollInit,
-                                           cloudInfo.imuPitchInit, cloudInfo.imuYawInit);
+                    pcl::getTransformation(initialGuess[3], initialGuess[4], initialGuess[5], initialGuess[0],
+                        initialGuess[1], initialGuess[2]);
             Eigen::Affine3f transIncre = lastImuTransformation.inverse() * transBack;
 
             Eigen::Affine3f transTobe = trans2Affine3f(transformTobeMapped);
@@ -1423,11 +1461,12 @@ public:
                     transformTobeMapped[1], transformTobeMapped[2]);
 
             // update last imu transformation
-            lastImuTransformation = pcl::getTransformation(
-                    0, 0, 0, cloudInfo.imuRollInit, cloudInfo.imuPitchInit,
-                    cloudInfo.imuYawInit);  // save imu before return;
+            lastImuTransformation = pcl::getTransformation(initialGuess[3], initialGuess[4], initialGuess[5], initialGuess[0],
+                initialGuess[1], initialGuess[2]);  // save imu before return;
+            PrintTransformTobeMapped("after cloudInfo.imuAvailable Finished");
             return;
         }
+
     }
 
     void extractForLoopClosure() {
@@ -2053,10 +2092,13 @@ public:
     void addOdomFactor() {
         if (cloudKeyPoses3D->points.empty()) {
             // 第一个关键帧的先验置信度
-            noiseModel::Diagonal::shared_ptr priorNoise =
-                    noiseModel::Diagonal::Variances(
-                            (Vector(6) << 1e-2, 1e-2, M_PI * M_PI, 1e8, 1e8, 1e8)
-                                    .finished());  // rad*rad, meter*meter
+            // 如果使用真值提供的初始位姿，就给高的置信度
+            noiseModel::Diagonal::shared_ptr priorNoise;
+            if (uesInitialVehiclePose) {
+                priorNoise =  noiseModel::Diagonal::Variances((Vector(6) << 1e-12, 1e-12, 1e-12, 1e-10, 1e-10, 1e-10).finished());
+            } else {
+                priorNoise = noiseModel::Diagonal::Variances((Vector(6) << 1e-2, 1e-2, M_PI * M_PI, 1e8, 1e8, 1e8).finished());
+            }
             // 增加先验约束，对第0个节点增加约束
             gtSAMgraph.add(PriorFactor<Pose3>(0, trans2gtsamPose(transformTobeMapped),
                                               priorNoise));
@@ -2082,86 +2124,63 @@ public:
     }
 
     void addRoadSideFactor() {
-        if (roadSideQueue.empty()) 
+        if (roadRegistrationQueue.empty() || cloudKeyPoses3D->points.empty()) {
             return;
+        }
 
-        // 系统初始化检查
-        if (cloudKeyPoses3D->points.empty())
+        std::lock_guard<std::mutex> lock(mtxRoadSideInfo);
+        auto roadRegMsg = roadRegistrationQueue.front();
+        roadRegistrationQueue.pop_front();
+    
+        // 从消息中获取关键帧ID
+        const int32_t msgKeyframeId = roadRegMsg.keyFrameId;
+        if (msgKeyframeId < 0) {
+            ROS_ERROR("Invalid keyframe ID: %d", msgKeyframeId);
             return;
+        }
+        int currKeyframeId = static_cast<int>(msgKeyframeId);
+        if (debugRoadSide) {
+            ROS_INFO_STREAM("[addRoadSideFactor] 2 currKeyframeId:" << currKeyframeId);
+        }
 
-        // 时间同步
-        nav_msgs::Odometry thisRoadSide;
-        if (syncRoadSide(roadSideQueue, thisRoadSide, timeLaserInfoCur, toleranceTime)) {
-            // 提取协方差参数
-            const float noise_x = thisRoadSide.pose.covariance[0];
-            const float noise_y = thisRoadSide.pose.covariance[7];
-            const float noise_z = thisRoadSide.pose.covariance[14];
-            const float noise_roll = thisRoadSide.pose.covariance[21];
-            const float noise_pitch = thisRoadSide.pose.covariance[28];
-            const float noise_yaw = thisRoadSide.pose.covariance[35];
-    
-            // 转换旋转阈值为弧度
-            const double ROT_THRES_RAD = roadRotationErrorThreshold * M_PI / 180.0; // 度转弧度
-    
-            // 噪声阈值检查
-            if (noise_x > roadTranslationErrorThreshold || 
-                noise_y > roadTranslationErrorThreshold || 
-                noise_z > roadTranslationErrorThreshold ||
-                noise_roll > ROT_THRES_RAD || 
-                noise_pitch > ROT_THRES_RAD || 
-                noise_yaw > ROT_THRES_RAD) {
-                ROS_WARN("Roadside noise exceeds threshold (trans: %.2fm, rot: %.1fdeg), skipped.", 
-                        roadTranslationErrorThreshold, roadRotationErrorThreshold);
-                return;
-            }
-    
-            // 转换为位姿
-            Eigen::Isometry3d roadSidePose = Eigen::Isometry3d::Identity();
-            roadSidePose.translation() << 
-                thisRoadSide.pose.pose.position.x,
-                thisRoadSide.pose.pose.position.y,
-                thisRoadSide.pose.pose.position.z;
-            roadSidePose.linear() = Eigen::Quaterniond(
-                thisRoadSide.pose.pose.orientation.w,
-                thisRoadSide.pose.pose.orientation.x,
-                thisRoadSide.pose.pose.orientation.y,
-                thisRoadSide.pose.pose.orientation.z
-            ).toRotationMatrix();
-    
-            // 转换为GTSAM格式
-            const gtsam::Pose3 pose3(
-                gtsam::Rot3(roadSidePose.linear()), 
-                gtsam::Point3(roadSidePose.translation())
-            );
-    
-            // 构建噪声模型
-            gtsam::Vector6 noiseVec6;
-            noiseVec6 << noise_x, noise_y, noise_z, noise_roll, noise_pitch, noise_yaw;
-            gtsam::noiseModel::Diagonal::shared_ptr noiseModel = 
-                gtsam::noiseModel::Diagonal::Variances(noiseVec6);
-    
-            // 创建先验因子
-            const size_t currKeyframeId = cloudKeyPoses3D->size();
-            gtsam::PriorFactor<gtsam::Pose3> priorFactor(currKeyframeId, pose3, noiseModel);
-    
-            // 存储到容器
-            mtxGraph.lock();
-            // 记录因子索引 (关键帧ID -> roadsidePoses索引)
-            roadIndexContainer[currKeyframeId] = cloudKeyroadSidePoses3D->points.size();
-            // 添加因子到图
-            gtSAMgraph.add(priorFactor);
-            mtxGraph.unlock();
-    
-            // 存储路侧位姿点云
-            PointType roadSidePoint;
-            roadSidePoint.x = roadSidePose.translation().x();
-            roadSidePoint.y = roadSidePose.translation().y();
-            roadSidePoint.z = roadSidePose.translation().z();
-            cloudKeyroadSidePoses3D->points.push_back(roadSidePoint);
-    
-            // 触发优化
-            aLoopIsClosed = true;
-            ROS_DEBUG("Added roadside prior to keyframe %lu", currKeyframeId);
+        // Vehicle frame to roadside frame的变换矩阵
+        Eigen::Isometry3d T_GNSSN_vehicle = Eigen::Isometry3d::Identity();
+        T_GNSSN_vehicle.translation() << 
+            roadRegMsg.pose.position.x,
+            roadRegMsg.pose.position.y,
+            roadRegMsg.pose.position.z;
+        T_GNSSN_vehicle.linear() = Eigen::Quaterniond(
+            roadRegMsg.pose.orientation.w,
+            roadRegMsg.pose.orientation.x,
+            roadRegMsg.pose.orientation.y,
+            roadRegMsg.pose.orientation.z
+        ).normalized().toRotationMatrix();
+
+        Eigen::Isometry3d T_n_vehicle = Eigen::Isometry3d(T_GNSSN_vehicle) ;
+        if (debugRoadSide) {
+            std::cout << "T_n_vehicle =\n" << T_n_vehicle.matrix() << std::endl;
+        }
+
+        // 转换为GTSAM格式（保持原逻辑）
+        const gtsam::Pose3 pose3(gtsam::Rot3(T_n_vehicle.linear()), gtsam::Point3(T_n_vehicle.translation()));
+        // 固定噪声模型（保持原逻辑）
+        static const gtsam::Vector6 fixedNoise = (gtsam::Vector6() << 0.1, 0.1, 0.1, 0.01, 0.01, 0.01).finished();
+        static const auto noiseModel = gtsam::noiseModel::Diagonal::Variances(fixedNoise);
+        // 添加先验因子（保持原逻辑）
+        gtSAMgraph.add(gtsam::PriorFactor<gtsam::Pose3>(currKeyframeId, pose3, noiseModel));
+
+        // 存储索引和位姿点云（坐标系转换后的位置）  下面这句话会报错
+        // roadIndexContainer[currKeyframeId] = static_cast<int>(cloudKeyroadSidePoses3D->points.size());
+
+        PointType roadSidePoint;
+        roadSidePoint.getVector3fMap() = T_n_vehicle.translation().cast<float>();
+        if (debugRoadSide) {
+            ROS_INFO_STREAM("[addRoadSideFactor] 7");
+        }
+        // cloudKeyroadSidePoses3D->points.push_back(roadSidePoint); 这句话会报错，但是不知道为什么
+        aLoopIsClosed = true;
+        if (debugRoadSide) {
+            ROS_INFO_STREAM("[Add RoadFactor] for keyframe" << currKeyframeId);
         }
     }
 
@@ -2353,7 +2372,7 @@ public:
         PointTypePose thisPose6D;
         Pose3 latestEstimate;
 
-        isamCurrentEstimate = isam->calculateEstimate();
+        isamCurrentEstimate = isam->calculateEstimate(); // 优化后的所有关键帧的位姿都存在这里面
         // 当前关键帧优化后的位姿
         latestEstimate =
                 isamCurrentEstimate.at<Pose3>(isamCurrentEstimate.size() - 1);
@@ -2383,7 +2402,6 @@ public:
         // endl;
         // 保存优化后当前位姿的置信度
         poseCovariance = isam->marginalCovariance(isamCurrentEstimate.size() - 1);
-
         // save updated transform  将优化后的位姿保存到transformTobeMapped中，作为当前最佳估计值
         transformTobeMapped[0] = latestEstimate.rotation().roll();
         transformTobeMapped[1] = latestEstimate.rotation().pitch();
@@ -2506,19 +2524,17 @@ public:
 
         globalPath.poses.push_back(pose_stamped);
     }
-    // 将transform转换成laserOdometryROS
-    void transformEiegn2Odom(double timestamp,
-                             nav_msgs::Odometry &laserOdometryROS,
-                             float transform[6]) {
-        laserOdometryROS.header.stamp = ros::Time().fromSec(timestamp);
-        laserOdometryROS.header.frame_id = odometryFrame;
-        laserOdometryROS.child_frame_id = "odom_mapping";
-        laserOdometryROS.pose.pose.position.x = transform[3];
-        laserOdometryROS.pose.pose.position.y = transform[4];
-        laserOdometryROS.pose.pose.position.z = transform[5];
-        laserOdometryROS.pose.pose.orientation =
-                tf::createQuaternionMsgFromRollPitchYaw(transform[0], transform[1],
-                                                        transform[2]);
+
+
+    void PrintTransformTobeMapped(const std::string &functionName) {
+        if (debugInitialVehiclePose) {
+            std::lock_guard<std::mutex> lock(debugKeyFrameMutex);
+            std::cout << functionName << " transformTobeMapped: ";
+            for (int i = 0; i < 6; ++i) {
+                std::cout << std::fixed << std::setprecision(3) << transformTobeMapped[i] << " ";
+            }
+            std::cout << std::endl;
+        }
     }
 
     void publishOdometry() {
@@ -2604,7 +2620,7 @@ public:
             // 也就是scan2map前后的位姿结果
             Eigen::Affine3f affineIncre = incrementalOdometryAffineFront.inverse() *
                                           incrementalOdometryAffineBack;
-            increOdomAffine = increOdomAffine * affineIncre;
+            increOdomAffine = increOdomAffine * affineIncre; // 这个是发布给imu的话题内容
             float x, y, z, roll, pitch, yaw;
             pcl::getTranslationAndEulerAngles(increOdomAffine, x, y, z, roll, pitch,
                                               yaw);
@@ -2688,7 +2704,7 @@ public:
             globalPath.header.frame_id = odometryFrame;
             pubPath.publish(globalPath);
         }
-        // publish SLAM infomation for 3rd-party usage
+        // publish SLAM infomation for 3rd-party usage，这里拿来给路侧lidar使用
         static int lastSLAMInfoPubSize = -1;
         if (pubSLAMInfo.getNumSubscribers() != 0) {
             if (lastSLAMInfoPubSize != cloudKeyPoses6D->size()) {
@@ -2702,13 +2718,16 @@ public:
                                                         timeLaserInfoStamp, lidarFrame);
                 slamInfo.key_frame_poses =
                         publishCloud(ros::Publisher(), cloudKeyPoses6D, timeLaserInfoStamp,
-                                     odometryFrame);
+                                     odometryFrame); // 这里面发布的是所有的关键帧6D的位姿以及时间戳和索引
                 pcl::PointCloud<PointType>::Ptr localMapOut(
                         new pcl::PointCloud<PointType>());
                 *localMapOut += *laserCloudCornerFromMapDS;
                 *localMapOut += *laserCloudSurfFromMapDS;
                 slamInfo.key_frame_map = publishCloud(
                         ros::Publisher(), localMapOut, timeLaserInfoStamp, odometryFrame);
+                // 新增发布降采样后的关键帧点云，这个点云已经去畸变了，路侧lidar可以使用
+                slamInfo.cloud_deskewed = publishCloud(ros::Publisher(), laserCloudRawDS,
+                                                       timeLaserInfoStamp, lidarFrame);
                 pubSLAMInfo.publish(slamInfo);
                 lastSLAMInfoPubSize = cloudKeyPoses6D->size();
             }

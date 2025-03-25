@@ -90,6 +90,7 @@ public:
     bool useGPS;
     bool useRoadSide;
     bool uesInitialVehiclePose;
+    bool debugInitialVehiclePose;
     bool updateOrigin;
     bool useImuHeadingInitialization;
     bool useGpsElevation;
@@ -149,12 +150,18 @@ public:
     Eigen::Vector3d t_body_sensor;
 
     // 路侧lidar在n系下的位置和姿态
-    vector<double> T_nRoadSideV;
-    Eigen::Matrix4d T_nRoadSide;
+    vector<double> T_nRoadLidarV;
+    Eigen::Matrix4d T_HDMapN_Road; // 路侧lidar到高精度地图n系的4乘4的变换矩阵，不过还没确定是不是到enu坐标系的转换
+    Eigen::Vector3d T_nRoad_Trans; // 平移量
+    PointType T_nRoad_TransPoint; // 平移量的点云形式
+    Eigen::Matrix3d T_nRoad_Roat; // 旋转矩阵
+    float rangeRoadVehicleThr; // 路侧lidar和车辆的距离阈值
     float roadTranslationErrorThreshold;
     float roadRotationErrorThreshold;
     float toleranceTime;
     bool debugRoadSide;
+    double roadCloudDs;
+    SensorType roadSensor;
 
     // LOAM
     float edgeThreshold; // 边缘点曲率的阈值
@@ -228,15 +235,29 @@ public:
 
         // 关于路侧lidar的参数配置
         nh.param<bool>("lio_sam_6axis/useRoadSide", useRoadSide, false);
-        if (useRoadSide) {
-            nh.param<vector<double >>("lio_sam_6axis/T_nRoadSide", T_nRoadSideV, vector<double>());
-            T_nRoadSide = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_nRoadSideV.data(), 4, 4);
-            nh.param<float>("lio_sam_6axis/roadtranslationErrorThreshold", roadTranslationErrorThreshold, 1);
-            nh.param<float>("lio_sam_6axis/roadRotationErrorThreshold", roadRotationErrorThreshold, 5.0);
-            nh.param<float>("lio_sam_6axis/toleranceTime", toleranceTime, 0.1);
-            nh.param<bool>("lio_sam_6axis/debugRoadSide", debugRoadSide, false);
+        nh.param<vector<double >>("lio_sam_6axis/T_nRoadLidar", T_nRoadLidarV, vector<double>());
+        T_HDMapN_Road = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_nRoadLidarV.data(), 4, 4);
+        T_nRoad_Trans = T_HDMapN_Road.block<3, 1>(0, 3);
+        T_nRoad_TransPoint.getVector3fMap() = T_nRoad_Trans.cast<float>();
+        T_nRoad_Roat = T_HDMapN_Road.block<3, 3>(0, 0);
+        nh.param<float>("lio_sam_6axis/rangeRoadVehicleThr", rangeRoadVehicleThr, 50);
+        nh.param<float>("lio_sam_6axis/roadtranslationErrorThreshold", roadTranslationErrorThreshold, 1);
+        nh.param<float>("lio_sam_6axis/roadRotationErrorThreshold", roadRotationErrorThreshold, 5.0);
+        nh.param<float>("lio_sam_6axis/toleranceTime", toleranceTime, 0.1);
+        nh.param<bool>("lio_sam_6axis/debugRoadSide", debugRoadSide, false);
+        std::string roadSensorStr;
+        nh.param<std::string>("lio_sam_6axis/roadSensor", roadSensorStr, "ouster");
+        nh.param<double>("lio_sam_6axis/roadCloudDs", roadCloudDs, 0.25);
+
+        if (roadSensorStr == "velodyne") {
+            roadSensor = SensorType::VELODYNE;
+        } else {
+            ROS_ERROR_STREAM("Invalid roadSensor type (must be either 'velodyne' or 'ouster' or 'livox'): " << roadSensorStr);
+            ros::shutdown();
         }
         nh.param<bool>("lio_sam_6axis/uesInitialVehiclePose", uesInitialVehiclePose, false);
+        nh.param<bool>("lio_sam_6axis/debugInitialVehiclePose", debugInitialVehiclePose, false);
+
 
         nh.param<bool>("lio_sam_6axis/savePCD", savePCD, false);
         nh.param<std::string>("lio_sam_6axis/savePCDDirectory", savePCDDirectory, "/Downloads/LOAM/");
@@ -398,8 +419,22 @@ public:
         return imu_out;
     }
 
-};
+    // 将transform转换成laserOdometryROS
+    void transformEiegn2Odom(double timestamp,
+        nav_msgs::Odometry &laserOdometryROS,
+        float transform[6]) {
+        laserOdometryROS.header.stamp = ros::Time().fromSec(timestamp);
+        laserOdometryROS.header.frame_id = odometryFrame;
+        laserOdometryROS.child_frame_id = "odom_mapping";
+        laserOdometryROS.pose.pose.position.x = transform[3];
+        laserOdometryROS.pose.pose.position.y = transform[4];
+        laserOdometryROS.pose.pose.position.z = transform[5];
+        laserOdometryROS.pose.pose.orientation =
+        tf::createQuaternionMsgFromRollPitchYaw(transform[0], transform[1],
+                                        transform[2]);
+    }
 
+};
 
 template<typename T>
 sensor_msgs::PointCloud2 publishCloud(const ros::Publisher &thisPub,
