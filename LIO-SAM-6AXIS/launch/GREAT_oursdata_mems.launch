@@ -18,7 +18,7 @@
     <!--show satellite-->
     <!--set your orgin gps lla  22.3387279108228 114.263622199692 87.7310562180355 -->
     <node pkg="rostopic" type="rostopic" name="fake_gps_fix"
-          args="pub gps/fix sensor_msgs/NavSatFix '{ header: auto, latitude: 22.3387279108228, longitude: 114.263622199692, altitude:  87.7310562}'"
+          args="pub gps/fix sensor_msgs/NavSatFix '{ header: auto, latitude: 30.396585788, longitude: 114.146383355, altitude:  11.098}'"
           output="screen"/>
 
     <!--- Run Navsat -->
