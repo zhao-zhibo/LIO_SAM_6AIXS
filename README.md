@@ -20,6 +20,21 @@ LIO_SAM_6AXIS is an open-source SLAM project based on the  project [LIO_SAM](htt
 
 ## Getting Started
 
+
+单步调试的操作，对module_loam_roadSide.launch文件进行修改，使其可以进行单步调试，操作命令如下：
+
+    <!-- 为每个节点添加 gdb 调试参数，以下操作可以单步调试ros节点 -->
+    <node pkg="$(arg project)" type="$(arg project)_imuPreintegration" name="$(arg project)_imuPreintegration"
+          output="screen" launch-prefix="xterm -e gdb --args"/>
+    <node pkg="$(arg project)" type="$(arg project)_imageProjection" name="$(arg project)_imageProjection"
+          output="screen" launch-prefix="xterm -e gdb --args"/>
+    <node pkg="$(arg project)" type="$(arg project)_featureExtraction" name="$(arg project)_featureExtraction"
+          output="screen" launch-prefix="xterm -e gdb --args"/>
+    <node pkg="$(arg project)" type="$(arg project)_mapOptmization" name="$(arg project)_mapOptmization"
+          output="screen" launch-prefix="xterm -e gdb --args"/>
+    <node pkg="$(arg project)" type="$(arg project)_roadSide" name="$(arg project)_roadSide"
+          output="screen" launch-prefix="xterm -e gdb --args"/>
+
 To get started with LIO_SAM_6AXIS, follow these steps:
 
 1. Clone the repository:

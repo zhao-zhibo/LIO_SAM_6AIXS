@@ -129,7 +129,6 @@ link_directories(
 ## Build ##
 ###########
 
-
 # Gps odometry
 add_executable(${PROJECT_NAME}_gpsOdometry src/simpleGpsOdom.cpp)
 target_link_libraries(${PROJECT_NAME}_gpsOdometry ${catkin_LIBRARIES} ${LIBXML2_LIBRARIES} ${Y_LIBRARIES} libGeographic)
@@ -158,7 +157,6 @@ target_link_libraries(${PROJECT_NAME}_imuPreintegration ${catkin_LIBRARIES} ${PC
 add_executable(${PROJECT_NAME}_roadSide src/roadSide.cpp)
 add_dependencies(${PROJECT_NAME}_roadSide ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
 target_link_libraries(${PROJECT_NAME}_roadSide ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam ${LIBXML2_LIBRARIES} ${Y_LIBRARIES} libGeographic )
-
 
 # 插入python文件的执行
 catkin_install_python(PROGRAMS scripts/callAllCommand.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

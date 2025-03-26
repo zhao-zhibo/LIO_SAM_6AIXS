@@ -28,7 +28,7 @@ lio_sam_6axis:
   # debug setting
   debugLidarTimestamp: false
   debugImu: false
-  debugGps: true
+  debugGps: false
 
   # Export settings
   savePCD: false                              # https://github.com/TixiaoShan/LIO-SAM/issues/3
@@ -52,23 +52,22 @@ lio_sam_6axis:
   imuAccelerIsG: false
 
   # RoadSide Settings
-  useRoadSide: true # 当useRoadSide置为true时，后面有关路侧lidar的参数才会生效
+  useRoadSide: true # 当useRoadSide置为true时，后端才会考虑加入路侧lidar的约束
   debugRoadSide: true
+  uesInitialVehiclePose: false   # 确定是否要用初始位置进行初始化，车辆的初始位置是从IE的ros服务中获取的
+  debugInitialVehiclePose: false # 当使用初始位置时，打印对应的日志 调试关键帧信息
+
+  roadSensor: velodyne
+  roadCloudDs: 0.2 # 路侧点云和车载点云降采样的尺度
   roadTranslationErrorThreshold: 1.0 # 路侧lidar和车载lidar配准后的平移误差阈值 单位为米
   roadRotationErrorThreshold: 5.0    # 路侧lidar和车载lidar配准后的旋转误差阈值 单位为度
-  toleranceTime: 0.05               # 路侧lidar和车载lidar配准的时间差阈值,就是配准的结果和当前帧结果可以容忍的时间，单位为秒
-  # 路侧Lidar和n系的变换矩阵
-  T_NRoadSideLidar:  [1, 0, 0, 0,
-                      0, 1, 0, 0,
-                      0, 0, 1, 0,
-                      0, 0, 0, 1]
-  # 确定是否要用初始位置进行初始化，车辆的初始位置是从python中插值得到的
-  uesInitialVehiclePose: false
-  # 初始时刻车载lidar和n系的变换矩阵，暂时先不用，初始时刻的位置和姿态需要从文件中差分
-  T_NVehicleLidar0: [1, 0, 0, 0,
-               0, 1, 0, 0,
-               0, 0, 1, 0,
-               0, 0, 0, 1]
+  toleranceTime: 0.04               # 路侧lidar和车载lidar配准的时间差阈值,就是配准的结果和当前帧结果可以容忍的时间，单位为秒
+  rangeRoadVehicleThr: 50          # 路侧lidar和车载lidar配准的距离阈值，单位为米
+  # 路侧Lidar和n系的变换矩阵, roadSide frame to n frame
+  T_nRoadLidar:  [-0.989779,  0.101124, -0.100557, 50.148455,
+                  -0.086973, -0.986838, -0.136332, 34.124473,
+                  -0.11302,  -0.126193,  0.985546,  4.181041,
+                  0.0   ,     0.0   ,     0.0 ,       1.0    ]
 
 
   # Extrinsics

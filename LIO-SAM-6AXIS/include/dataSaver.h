@@ -1,7 +1,7 @@
 //
 // Created by xchu on 2022/5/19.
 //
-
+#pragma once
 #ifndef FAST_LIO_SRC_PGO_SRC_DATASAVER_H_
 #define FAST_LIO_SRC_PGO_SRC_DATASAVER_H_
 
@@ -42,6 +42,26 @@ using namespace gtsam;
 
 using PointT = pcl::PointXYZI;
 
+struct PointXYZIRPYT {
+    PCL_ADD_POINT4D
+
+    PCL_ADD_INTENSITY;  // preferred way of adding a XYZ+padding
+    float roll;
+    float pitch;
+    float yaw;
+    double time;
+
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW  // make sure our new allocators are aligned
+} EIGEN_ALIGN16;  // enforce SSE padding for correct memory alignment
+
+POINT_CLOUD_REGISTER_POINT_STRUCT(
+        PointXYZIRPYT,
+        (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(
+                float, roll, roll)(float, pitch, pitch)(float, yaw, yaw)(double, time,
+                                                                         time))
+
+typedef PointXYZIRPYT PointTypePose;
+
 class DataSaver {
  public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -71,6 +91,8 @@ class DataSaver {
 
   void saveOdometryVerticesTUM(
       std::vector<nav_msgs::Odometry> keyframePosesOdom);
+
+  void saveOdometrycloudKeyPoses6DTUM(pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D);
 
   void saveGraphGtsam(gtsam::NonlinearFactorGraph gtSAMgraph,
                       gtsam::ISAM2 *isam, gtsam::Values isamCurrentEstimate);

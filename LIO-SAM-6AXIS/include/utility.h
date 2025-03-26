@@ -152,8 +152,6 @@ public:
     // 路侧lidar在n系下的位置和姿态
     vector<double> T_nRoadLidarV;
     Eigen::Matrix4d T_HDMapN_Road; // 路侧lidar到高精度地图n系的4乘4的变换矩阵，不过还没确定是不是到enu坐标系的转换
-    Eigen::Vector3d T_nRoad_Trans; // 平移量
-    PointType T_nRoad_TransPoint; // 平移量的点云形式
     Eigen::Matrix3d T_nRoad_Roat; // 旋转矩阵
     float rangeRoadVehicleThr; // 路侧lidar和车辆的距离阈值
     float roadTranslationErrorThreshold;
@@ -235,10 +233,12 @@ public:
 
         // 关于路侧lidar的参数配置
         nh.param<bool>("lio_sam_6axis/useRoadSide", useRoadSide, false);
-        nh.param<vector<double >>("lio_sam_6axis/T_nRoadLidar", T_nRoadLidarV, vector<double>());
+        std::vector<double> defaultT(16, 0.0);
+        for (int i = 0; i < 4; ++i) {
+            defaultT[i*5] = 1.0;  // 对角线赋值为1
+        }
+        nh.param<vector<double >>("lio_sam_6axis/T_nRoadLidar", T_nRoadLidarV, defaultT);
         T_HDMapN_Road = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_nRoadLidarV.data(), 4, 4);
-        T_nRoad_Trans = T_HDMapN_Road.block<3, 1>(0, 3);
-        T_nRoad_TransPoint.getVector3fMap() = T_nRoad_Trans.cast<float>();
         T_nRoad_Roat = T_HDMapN_Road.block<3, 3>(0, 0);
         nh.param<float>("lio_sam_6axis/rangeRoadVehicleThr", rangeRoadVehicleThr, 50);
         nh.param<float>("lio_sam_6axis/roadtranslationErrorThreshold", roadTranslationErrorThreshold, 1);
@@ -481,11 +481,11 @@ void imuRPY2rosRPY(sensor_msgs::Imu *thisImuMsg, T *rosRoll, T *rosPitch, T *ros
     *rosYaw = imuYaw;
 }
 
-float pointDistance(PointType p) {
+inline float pointDistance(PointType p) {
     return sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
 }
 
-float pointDistance(PointType p1, PointType p2) {
+inline float pointDistance(PointType p1, PointType p2) {
     return sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z));
 }
 

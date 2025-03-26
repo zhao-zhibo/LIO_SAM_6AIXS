@@ -46,26 +46,6 @@ using symbol_shorthand::X;  // Pose3 (x,y,z,r,p,y)
  * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is
  * time stamp)
  */
-struct PointXYZIRPYT {
-    PCL_ADD_POINT4D
-
-    PCL_ADD_INTENSITY;  // preferred way of adding a XYZ+padding
-    float roll;
-    float pitch;
-    float yaw;
-    double time;
-
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW  // make sure our new allocators are aligned
-} EIGEN_ALIGN16;  // enforce SSE padding for correct memory alignment
-
-POINT_CLOUD_REGISTER_POINT_STRUCT(
-        PointXYZIRPYT,
-        (float, x, x)(float, y, y)(float, z, z)(float, intensity, intensity)(
-                float, roll, roll)(float, pitch, pitch)(float, yaw, yaw)(double, time,
-                                                                         time))
-
-typedef PointXYZIRPYT PointTypePose;
-
 class mapOptimization : public ParamServer {
 public:
     NonlinearFactorGraph gtSAMgraph;
@@ -185,7 +165,7 @@ public:
     double timeLaserInfoCur; // 当前处理帧的时间戳
     // double timeStampInitial;
 
-    float transformTobeMapped[6];
+    float transformTobeMapped[6]; // 0  1  2 : roll  pitch  yaw,   3 4  5: x  y  z
 
     std::mutex mtx;
     std::mutex mtxLoopInfo;
@@ -644,6 +624,8 @@ public:
         dataSaverPtr->saveOptimizedVerticesTUM(isamCurrentEstimate);
         //dataSaverPtr->saveOptimizedVerticesKITTI(isamCurrentEstimate);
         dataSaverPtr->saveOdometryVerticesTUM(keyframeRawOdom);
+        // dataSaverPtr->saveOdometrycloudKeyPoses6DTUM(cloudKeyPoses6D);
+
         // dataSaverPtr->saveResultBag(keyframePosesOdom, keyframeCloudDeskewed, transform_vec);
         if (useGPS) dataSaverPtr->saveKMLTrajectory(lla_vec);
 

@@ -108,6 +108,7 @@ private:
     int deskewFlag; // 畸变校正的标志
     std::mutex mtxRoadCloud;
     double roadCloudTime;
+    PointType pose3DRoadSide; // 以gnss的n系为原点的路侧lidar的平移量，也就是路侧lidar在gnss的n系下的位置
 
     // 车载传感器的关键帧信息
     lio_sam_6axis::cloud_info vehicleOptmCloudInfo; // 关键帧的信息，下面的变量都是从这个变量中提取的
@@ -122,7 +123,7 @@ private:
     std::deque<lio_sam_6axis::road_registration> roadRegistrationDeque;
     std::mutex registDequeMutex; // 互斥锁
     const size_t maxDequeSize = 400;  // 队列最大长度
-    Eigen::Vector3d GNSSOriginLLA; // 原点的经纬度和高度
+    Eigen::Vector3d GNSSOriginLLA; // 原点的纬度、经度和高度
 
 
 public:
@@ -221,6 +222,8 @@ public:
         T_GNSSN_HDMapN(2,3) = enu[2];
 
         T_GNSSN_Road = T_GNSSN_HDMapN * T_HDMapN_Road;
+        Eigen::Vector3d T_GNSSN_Road_Trans = T_GNSSN_Road.block<3, 1>(0, 3);
+        pose3DRoadSide.getVector3fMap() = T_GNSSN_Road_Trans.cast<float>();
         return true;
     }
 
@@ -258,7 +261,7 @@ public:
         }
 
         // 判断车子是否在路侧lidar范围内
-        float rangeRoadVehicle = pointDistance(T_nRoad_TransPoint, latestKeyPoint);
+        float rangeRoadVehicle = pointDistance(pose3DRoadSide, latestKeyPoint);
         // 在VehicleInfoHandler中调用updateLatestKeyPoint后，插入如下日志输出：
         isWithinRoadRange = (rangeRoadVehicle <= rangeRoadVehicleThr) ? true : false;
         if (!isWithinRoadRange) {
