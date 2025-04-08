@@ -13,15 +13,15 @@
 #include <pcl/filters/filter.h>
 #include <pcl/features/normal_3d.h>
 
-#include <benchmark/read_points.hpp>
-#include <ann/kdtree_omp.hpp>
-#include <points/point_cloud.hpp>
-#include <factors/gicp_factor.hpp>
-#include <factors/plane_icp_factor.hpp>
-#include <util/downsampling_omp.hpp>
-#include <util/normal_estimation_omp.hpp>
-#include <registration/reduction_omp.hpp>
-#include <registration/registration.hpp>
+#include <small_gicp/benchmark/read_points.hpp>
+#include <small_gicp/ann/kdtree_omp.hpp>
+#include <small_gicp/points/point_cloud.hpp>
+#include <small_gicp/factors/gicp_factor.hpp>
+#include <small_gicp/factors/plane_icp_factor.hpp>
+#include <small_gicp/util/downsampling_omp.hpp>
+#include <small_gicp/util/normal_estimation_omp.hpp>
+#include <small_gicp/registration/reduction_omp.hpp>
+#include <small_gicp/registration/registration.hpp>
 
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/point_cloud.h>
@@ -421,11 +421,11 @@ RegistrationResult PerformRegistration(const MyPointCloud& target, const MyPoint
 }
 
 // 主配准函数
-Eigen::Matrix4d CloudRegistrationGicp(const std::vector<Eigen::Vector4f>& target_points, const std::vector<Eigen::Vector4f>& source_points,
+small_gicp::RegistrationResult CloudRegistrationGicp(const std::vector<Eigen::Vector4f>& target_points, const std::vector<Eigen::Vector4f>& source_points,
   const Eigen::Matrix4d& initialTransform, double downsampleRes) {
-    int num_threads = 32;                       // Number of threads to be used
-    int num_neighbors = 10;                    // Number of neighbor points used for normal and covariance estimation
-    double max_correspondence_distance = 1.0;  // Maximum correspondence distance between points (e.g., triming threshold)
+    int num_threads = 4;                       // Number of threads to be used
+    int num_neighbors = 20;                    // Number of neighbor points used for normal and covariance estimation
+    double max_correspondence_distance = 2.0;  // Maximum correspondence distance between points (e.g., triming threshold)
 
     // Convert to MyPointCloud
     std::shared_ptr<MyPointCloud> target = std::make_shared<MyPointCloud>();
@@ -489,7 +489,8 @@ Eigen::Matrix4d CloudRegistrationGicp(const std::vector<Eigen::Vector4f>& target
     Eigen::Isometry3d init_T_target_source;
     init_T_target_source.linear() = R;
     init_T_target_source.translation() = T;
-    auto result = registration.align(*target, *source, *target_search, init_T_target_source);
+    auto result =  registration.align(*target, *source, *target_search, init_T_target_source);
+    return result;
 
     std::cout << "--- initialTransform ---" << std::endl << initialTransform << std::endl;
     std::cout << "--- T_target_source ---" << std::endl << result.T_target_source.matrix() << std::endl;
@@ -497,8 +498,8 @@ Eigen::Matrix4d CloudRegistrationGicp(const std::vector<Eigen::Vector4f>& target
     std::cout << "error:" << result.error << std::endl;
     std::cout << "iterations:" << result.iterations << std::endl;
     std::cout << "num_inliers:" << result.num_inliers << std::endl;
-    std::cout << "--- H ---" << std::endl << result.H << std::endl;
-    std::cout << "--- b ---" << std::endl << result.b.transpose() << std::endl;
+    // std::cout << "--- H ---" << std::endl << result.H << std::endl;
+    // std::cout << "--- b ---" << std::endl << result.b.transpose() << std::endl;
 
     // 显示对齐前和对齐后的点云
     // pcl::PointCloud<pcl::PointXYZ>::Ptr sourcePoints = convertMyPointCloudToPCL(*source);
@@ -506,7 +507,7 @@ Eigen::Matrix4d CloudRegistrationGicp(const std::vector<Eigen::Vector4f>& target
     // pcl::PointCloud<pcl::PointXYZ>::Ptr alignedPoints = transformPointCloud(sourcePoints,result.T_target_source.matrix());
     // // visualizeAlignment(sourcePoints, targetPoints, alignedPoints);
 
-    return result.T_target_source.matrix();
+    // return result.T_target_source.matrix();
 
   }
 
@@ -572,4 +573,3 @@ Eigen::Matrix4d CloudRegistration(const std::vector<Eigen::Vector4f>& targetPoin
               << "Translation difference: " << translationError << " m" << std::endl;
     return refinedTransform;
 }
-

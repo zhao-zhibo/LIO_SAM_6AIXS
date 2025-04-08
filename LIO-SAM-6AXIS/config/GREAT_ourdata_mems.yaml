@@ -52,8 +52,9 @@ lio_sam_6axis:
   imuAccelerIsG: false
 
   # RoadSide Settings
-  useRoadSide: true # 当useRoadSide置为true时，后端才会考虑加入路侧lidar的约束
+  useRoadSide: true  # 当useRoadSide置为true时，后端才会考虑加入路侧lidar的约束
   debugRoadSide: true
+  saveFileBasePath: "/home/zhao/Data/tunnelData/data_2025220163953/OutputFile/"
   uesInitialVehiclePose: false   # 确定是否要用初始位置进行初始化，车辆的初始位置是从IE的ros服务中获取的
   debugInitialVehiclePose: false # 当使用初始位置时，打印对应的日志 调试关键帧信息
 
@@ -62,12 +63,19 @@ lio_sam_6axis:
   roadTranslationErrorThreshold: 1.0 # 路侧lidar和车载lidar配准后的平移误差阈值 单位为米
   roadRotationErrorThreshold: 5.0    # 路侧lidar和车载lidar配准后的旋转误差阈值 单位为度
   toleranceTime: 0.04               # 路侧lidar和车载lidar配准的时间差阈值,就是配准的结果和当前帧结果可以容忍的时间，单位为秒
-  rangeRoadVehicleThr: 50          # 路侧lidar和车载lidar配准的距离阈值，单位为米
+  rangeRoadVehicleThr: 30          # 路侧lidar和车载lidar配准的距离阈值，单位为米
   # 路侧Lidar和n系的变换矩阵, roadSide frame to n frame
-  T_nRoadLidar:  [-0.989779,  0.101124, -0.100557, 50.148455,
-                  -0.086973, -0.986838, -0.136332, 34.124473,
-                  -0.11302,  -0.126193,  0.985546,  4.181041,
-                  0.0   ,     0.0   ,     0.0 ,       1.0    ]
+  # 经过特征点计算的变换矩阵，也就是粗校准
+  # T_nRoadLidar:  [-0.989779,  0.101124, -0.100557, 50.148455,
+  #                 -0.086973, -0.986838, -0.136332, 34.124473,
+  #                 -0.11302,  -0.126193,  0.985546,  4.181041,
+  #                 0.0   ,     0.0   ,     0.0 ,       1.0    ]
+  # 经过small gicp校准后的变换矩阵，也就是精校准           
+  T_nRoadLidar:  [-0.990361,  0.0960783, -0.0997733, 50.2114,
+                  -0.0819912, -0.987201, -0.136789, 34.1127,
+                  -0.111639, -0.12729,  0.985562,  4.17938,
+                  0.0,       0.0,       0.0,       1.0]
+  
 
 
   # Extrinsics
@@ -97,13 +105,13 @@ lio_sam_6axis:
   z_tollerance: 1000                            # meters
   rotation_tollerance: 1000                     # radians
 
-  # CPU Params
+  # CPU Params  mappingProcessInterval影响关键帧的频率
   numberOfCores: 64                             # number of cores for mapping optimization
-  mappingProcessInterval: 0.0                   # seconds, regulate mapping frequency
+  mappingProcessInterval: 0.15                   # seconds, regulate mapping frequency
 
   # Surrounding map 修改关键帧的阈值，使其能够以更高的频率添加关键帧，也就是0.1秒添加一个关键帧
-  surroundingkeyframeAddingDistThreshold: -10   # meters, regulate keyframe adding threshold
-  surroundingkeyframeAddingAngleThreshold: -10  # radians, regulate keyframe adding threshold
+  surroundingkeyframeAddingDistThreshold: 0.3   # meters, regulate keyframe adding threshold
+  surroundingkeyframeAddingAngleThreshold: 0.3  # radians, regulate keyframe adding threshold
   surroundingKeyframeDensity: 0.1               # meters, downsample surrounding keyframe poses   
   surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization (when loop closure disabled)
 

@@ -10,7 +10,7 @@ namespace small_gicp {
 
 /// @brief GaussNewton optimizer
 struct GaussNewtonOptimizer {
-  GaussNewtonOptimizer() : verbose(false), max_iterations(20), lambda(1e-6) {}
+  GaussNewtonOptimizer() : verbose(true), max_iterations(50), lambda(1e-6) {}
 
   template <
     typename TargetPointCloud,

@@ -137,3 +137,102 @@ We would like to thank TixiaoShan for creating the LIO_SAM project that served a
 Our deep gratitude goes to [pedrotomas27](https://github.com/),  [Guoqing Zhang](https://github.com/MyEvolution), [Jianhao Jiao](https://github.com/gogojjh), [Jin Wu](https://github.com/zarathustr), and [Qingwen Zhang](https://github.com/Kin-Zhang) for their invaluable contributions to this project. A special mention goes to the [LIO_SAM](https://github.com/TixiaoShan/LIO-SAM)  for laying the groundwork for our efforts. We also thank the open-source community, whose relentless pursuit of SLAM technology advancement has made this project possible.
 
 ![Star History Chart](https://api.star-history.com/svg?repos=JokerJohn/LIO_SAM_6AXIS&type=Date)
+
+
+
+// small gicp for fine registration
+template<typename T>
+bool small_gicp_registration(typename pcl::PointCloud<T>::Ptr &source,
+                            typename pcl::PointCloud<T>::Ptr &target,
+                            std::pair<Eigen::Vector3d, Eigen::Matrix3d> &refine_transform,
+                            smallGICPConfig &small_gicp_config,
+                            RegRes &icp_res)
+{
+    std::vector<Eigen::Vector3d> target_points;   // Any of Eigen::Vector(3|4)(f|d) can be used
+    std::vector<Eigen::Vector3d> source_points;   // 
+    
+    point_to_vector<T>(source, source_points);
+    point_to_vector<T>(target, target_points);
+
+    small_gicp::RegistrationSetting setting;
+    
+    std::string methodType = small_gicp_config.method;
+    if(methodType == "ICP")
+            setting.type = setting.ICP;
+        else if(methodType == "GICP")
+            setting.type = setting.GICP;
+        else if(methodType == "VGICP")
+            setting.type = setting.VGICP;
+        else if(methodType == "PLANE_ICP")
+            setting.type = setting.PLANE_ICP;
+        else 
+            std::cout << "Registration method Error" << std::endl;
+    
+    setting.num_threads = small_gicp_config.num_threads;                    // Number of threads to be used
+    setting.downsampling_resolution = small_gicp_config.downsampling_resolution;     // Downsampling resolution
+    setting.max_correspondence_distance = small_gicp_config.max_correspondence_distance;  // Maximum correspondence distance between points (e.g., triming threshold)
+    setting.max_iterations = small_gicp_config.max_iterations;
+    setting.rotation_eps = small_gicp_config.rotation_eps;
+    setting.translation_eps = small_gicp_config.translation_eps;
+    // only for VGICP
+    setting.voxel_resolution = small_gicp_config.voxel_resolution;
+    // std::cout << "here is good-1" << std::endl;
+    // init trans was setted to Identity
+    TicToc t(true);
+    t.tic();
+    Eigen::Isometry3d init_T_target_source = Eigen::Isometry3d::Identity();
+    small_gicp::RegistrationResult result = small_gicp::align(target_points, source_points, init_T_target_source, setting);
+    // t.toc("---------------------reg time: ");
+
+     // std::cout << "here is good-2" << std::endl;
+    // Number of inlier source points
+    size_t num_inliers = result.num_inliers;
+    // get the transformation
+    Eigen::Isometry3d resT = result.T_target_source;  // Estimated transformation
+    Eigen::Matrix4d transMatrix = resT.matrix();
+    // get the evaluation metrices
+    Eigen::Matrix<double, 6, 6> H = result.H;      // Final Hessian matrix (6x6)
+    double inlier_ratio = ((double)num_inliers/(double)source->points.size());
+    double err = result.error/(double)num_inliers;
+        // std::cout << "------num_inliers: "<< num_inliers << ", " << source->points.size() << std::endl;
+    // // std::cout << "H: " << H/(double)source->points.size() << std::endl;
+    // std::cout << "------inlier_ratio: "<< inlier_ratio << std::endl;
+    // std::cout << "********error: " << err << std::endl;
+    // std::cout << "result.converged: " << result.converged << std::endl;
+    // // std::cout << "transMatrix:\n" << transMatrix << std::endl;
+    icp_res.inlier_ratio = inlier_ratio;
+    icp_res.regis_error = result.error/(double)num_inliers;
+    icp_res.is_convergence = result.converged;
+    
+    // if not use convergence, then, the convergence is always true
+    if(!small_gicp_config.useConvergence)
+        result.converged = true;
+    
+    // define the fine registration is success or not
+    if(result.converged && err < small_gicp_config.errorThres 
+        && inlier_ratio > small_gicp_config.inlier_ratio) // result.converged && err < 0.01 && inlier_ratio > 0.4   
+    {
+        // std::cout << BOLDGREEN << "==============Crroect===========" << RESET << std::endl;        
+        matrix_to_pair(transMatrix, refine_transform);
+        return true;
+    }
+    else
+    {
+        // std::cout << BOLDRED << "==============error===========" << RESET << std::endl;
+        refine_transform.first = Eigen::Vector3d::Zero();
+        refine_transform.second = Eigen::Matrix3d::Identity(); 
+        
+        return false;
+    }
+
+}
+
+// # for refine registration
+//   method: "GICP"
+//   num_threads: 6
+//   downsampling_resolution: 0.2 # 0.01
+//   max_correspondence_distance: 1.0 # 0.5
+//   voxel_resolution: 1.0
+//   max_iterations: 30
+//   rotation_eps: 0.017  # 0.017 = 0.1 * M_PI / 180.0
+//   translation_eps: 0.001 # 1e-3

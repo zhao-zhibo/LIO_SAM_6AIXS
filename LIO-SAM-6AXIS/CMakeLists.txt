@@ -69,7 +69,7 @@ generate_messages(
 )
 
 add_subdirectory(./ThirdParty/GeographicLib/)
-add_subdirectory(./ThirdParty/smallGicp/)
+add_subdirectory(./ThirdParty/small_gicp/)
 
 catkin_package(
         INCLUDE_DIRS include
@@ -94,6 +94,7 @@ install(
 # include directories
 include_directories(
         include
+        /usr/local/include                    # [!新增!]
         ${catkin_INCLUDE_DIRS}
         ${PCL_INCLUDE_DIRS}
         ${OpenCV_INCLUDE_DIRS}
@@ -102,14 +103,14 @@ include_directories(
         ${LIBXML2_INCLUDE_DIRS}
         # ${VTK_INCLUDE_DIRS}
         ./ThirdParty/GeographicLib/include/
-        ./ThirdParty/smallGicp/include/
-        ./ThirdParty/smallGicp/include/ann
-        ./ThirdParty/smallGicp/include/benchmark
-        ./ThirdParty/smallGicp/include/factors
-        ./ThirdParty/smallGicp/include/pcl
-        ./ThirdParty/smallGicp/include/points
-        ./ThirdParty/smallGicp/include/registration
-        ./ThirdParty/smallGicp/include/util
+        ./ThirdParty/small_gicp/include/
+        ./ThirdParty/small_gicp/include/ann
+        ./ThirdParty/small_gicp/include/benchmark
+        ./ThirdParty/small_gicp/include/factors
+        ./ThirdParty/small_gicp/include/pcl
+        ./ThirdParty/small_gicp/include/points
+        ./ThirdParty/small_gicp/include/registration
+        ./ThirdParty/small_gicp/include/util
 )
 
 # include(${VTK_USE_FILE})
@@ -156,7 +157,8 @@ target_link_libraries(${PROJECT_NAME}_imuPreintegration ${catkin_LIBRARIES} ${PC
 # RoadSide Process
 add_executable(${PROJECT_NAME}_roadSide src/roadSide.cpp)
 add_dependencies(${PROJECT_NAME}_roadSide ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
-target_link_libraries(${PROJECT_NAME}_roadSide ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam ${LIBXML2_LIBRARIES} ${Y_LIBRARIES} libGeographic )
+target_link_libraries(${PROJECT_NAME}_roadSide  SmallGicp
+        ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBRARIES} gtsam ${LIBXML2_LIBRARIES} ${Y_LIBRARIES} libGeographic )
 
 # 插入python文件的执行
 catkin_install_python(PROGRAMS scripts/callAllCommand.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

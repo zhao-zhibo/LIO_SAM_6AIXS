@@ -9,7 +9,8 @@ namespace small_gicp {
 /// @brief Registration termination criteria
 struct TerminationCriteria {
   /// @brief Constructor
-  TerminationCriteria() : translation_eps(1e-3), rotation_eps(0.1 * M_PI / 180.0) {}
+  // 现在设置的收敛阈值，平移量是0.001米，旋转量是0.2度，之前旋转量是0.1度
+  TerminationCriteria() : translation_eps(1e-3), rotation_eps(0.2 * M_PI / 180.0) {}
 
   /// @brief Check the convergence
   /// @param delta  Transformation update vector

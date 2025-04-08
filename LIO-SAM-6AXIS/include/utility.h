@@ -108,6 +108,7 @@ public:
     // Save pcd
     bool savePCD;
     string savePCDDirectory;
+    string saveFileBasePath;
     string sequence;
     string saveDirectory;
     string configDirectory;
@@ -248,7 +249,7 @@ public:
         std::string roadSensorStr;
         nh.param<std::string>("lio_sam_6axis/roadSensor", roadSensorStr, "ouster");
         nh.param<double>("lio_sam_6axis/roadCloudDs", roadCloudDs, 0.25);
-
+        nh.param<std::string>("lio_sam_6axis/saveFileBasePath", saveFileBasePath, "/Downloads/LOAM/");
         if (roadSensorStr == "velodyne") {
             roadSensor = SensorType::VELODYNE;
         } else {

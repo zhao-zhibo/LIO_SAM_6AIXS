@@ -232,7 +232,7 @@ public:
         pubPath = nh.advertise<nav_msgs::Path>("/path", 1);
 
         subCloud = nh.subscribe<lio_sam_6axis::cloud_info>(
-                "lio_sam_6axis/feature/cloud_info", 1,
+                "lio_sam_6axis/feature/cloud_info", 10,
                 &mapOptimization::laserCloudInfoHandler, this,
                 ros::TransportHints().tcpNoDelay());
 
@@ -2106,63 +2106,62 @@ public:
     }
 
     void addRoadSideFactor() {
+        static int addRoadNum = 0;
         if (roadRegistrationQueue.empty() || cloudKeyPoses3D->points.empty()) {
             return;
         }
 
         std::lock_guard<std::mutex> lock(mtxRoadSideInfo);
-        auto roadRegMsg = roadRegistrationQueue.front();
-        roadRegistrationQueue.pop_front();
-    
-        // 从消息中获取关键帧ID
-        const int32_t msgKeyframeId = roadRegMsg.keyFrameId;
-        if (msgKeyframeId < 0) {
-            ROS_ERROR("Invalid keyframe ID: %d", msgKeyframeId);
-            return;
-        }
-        int currKeyframeId = static_cast<int>(msgKeyframeId);
-        if (debugRoadSide) {
-            ROS_INFO_STREAM("[addRoadSideFactor] 2 currKeyframeId:" << currKeyframeId);
-        }
-
-        // Vehicle frame to roadside frame的变换矩阵
-        Eigen::Isometry3d T_GNSSN_vehicle = Eigen::Isometry3d::Identity();
-        T_GNSSN_vehicle.translation() << 
-            roadRegMsg.pose.position.x,
-            roadRegMsg.pose.position.y,
-            roadRegMsg.pose.position.z;
-        T_GNSSN_vehicle.linear() = Eigen::Quaterniond(
-            roadRegMsg.pose.orientation.w,
-            roadRegMsg.pose.orientation.x,
-            roadRegMsg.pose.orientation.y,
-            roadRegMsg.pose.orientation.z
-        ).normalized().toRotationMatrix();
-
-        Eigen::Isometry3d T_n_vehicle = Eigen::Isometry3d(T_GNSSN_vehicle) ;
-        if (debugRoadSide) {
-            std::cout << "T_n_vehicle =\n" << T_n_vehicle.matrix() << std::endl;
-        }
-
-        // 转换为GTSAM格式（保持原逻辑）
-        const gtsam::Pose3 pose3(gtsam::Rot3(T_n_vehicle.linear()), gtsam::Point3(T_n_vehicle.translation()));
+        // 先复制一份队列中的数据，然后清空原队列
+        std::deque<lio_sam_6axis::road_registration> localQueue = roadRegistrationQueue;
+        roadRegistrationQueue.clear();
         // 固定噪声模型（保持原逻辑）
-        static const gtsam::Vector6 fixedNoise = (gtsam::Vector6() << 0.1, 0.1, 0.1, 0.01, 0.01, 0.01).finished();
+        static const gtsam::Vector6 fixedNoise = (gtsam::Vector6() << 3, 3, 3, 0.1, 0.1, 0.1).finished();
         static const auto noiseModel = gtsam::noiseModel::Diagonal::Variances(fixedNoise);
-        // 添加先验因子（保持原逻辑）
-        gtSAMgraph.add(gtsam::PriorFactor<gtsam::Pose3>(currKeyframeId, pose3, noiseModel));
+
+        for (const auto &roadRegMsg : localQueue) {
+            const int32_t msgKeyframeId = roadRegMsg.keyFrameId;
+            if (msgKeyframeId <= 0) {
+                ROS_ERROR("Invalid keyframe ID: %d", msgKeyframeId);
+                continue;
+            }
+            int currKeyframeId = static_cast<int>(msgKeyframeId);
+            if (debugRoadSide) {
+                ROS_INFO_STREAM("[addRoadSideFactor] currKeyframeId:" << currKeyframeId);
+            }
+    
+            // 构造从路侧观测到的位姿变换矩阵
+            Eigen::Isometry3d T_GNSSN_vehicle = Eigen::Isometry3d::Identity();
+            T_GNSSN_vehicle.translation() << roadRegMsg.pose.position.x,
+                                              roadRegMsg.pose.position.y,
+                                              roadRegMsg.pose.position.z;
+            T_GNSSN_vehicle.linear() = Eigen::Quaterniond(
+                roadRegMsg.pose.orientation.w,
+                roadRegMsg.pose.orientation.x,
+                roadRegMsg.pose.orientation.y,
+                roadRegMsg.pose.orientation.z
+            ).normalized().toRotationMatrix();
+            Eigen::Isometry3d T_n_vehicle = T_GNSSN_vehicle;
+            if (debugRoadSide) {
+                std::cout << "T_n_vehicle =\n" << T_n_vehicle.matrix() << std::endl;
+            }
+    
+            // 转换为GTSAM格式
+            gtsam::Pose3 pose3(gtsam::Rot3(T_n_vehicle.linear()),
+                               gtsam::Point3(T_n_vehicle.translation()));
+            gtSAMgraph.add(gtsam::PriorFactor<gtsam::Pose3>(currKeyframeId, pose3, noiseModel));
+            addRoadNum++;
+        }
 
         // 存储索引和位姿点云（坐标系转换后的位置）  下面这句话会报错
         // roadIndexContainer[currKeyframeId] = static_cast<int>(cloudKeyroadSidePoses3D->points.size());
-
-        PointType roadSidePoint;
-        roadSidePoint.getVector3fMap() = T_n_vehicle.translation().cast<float>();
-        if (debugRoadSide) {
-            ROS_INFO_STREAM("[addRoadSideFactor] 7");
-        }
-        // cloudKeyroadSidePoses3D->points.push_back(roadSidePoint); 这句话会报错，但是不知道为什么
+        // PointType roadSidePoint;
+        // roadSidePoint.getVector3fMap() = T_n_vehicle.translation().cast<float>();
+        // cloudKeyroadSidePoses3D->points.push_back(roadSidePoint); 这句话会报错，但是还没仔细研究
         aLoopIsClosed = true;
         if (debugRoadSide) {
-            ROS_INFO_STREAM("[Add RoadFactor] for keyframe" << currKeyframeId);
+            ROS_INFO_STREAM("[addRoadSideFactor] Total addRoadNum count: " << addRoadNum 
+                << ". Added roadside factors: " << localQueue.size());
         }
     }
 

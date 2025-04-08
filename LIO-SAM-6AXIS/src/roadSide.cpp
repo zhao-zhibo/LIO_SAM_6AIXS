@@ -122,9 +122,16 @@ private:
     // 点云配准的信息
     std::deque<lio_sam_6axis::road_registration> roadRegistrationDeque;
     std::mutex registDequeMutex; // 互斥锁
-    const size_t maxDequeSize = 400;  // 队列最大长度
+    const size_t maxDequeSize = 1000;  // 队列最大长度
     Eigen::Vector3d GNSSOriginLLA; // 原点的纬度、经度和高度
+    std::string registrationT_NVehicle_OutputFile; // 点云配准的输出文件
+    std::string initialT_NVehicle_OutputFile;      // 原始车辆位姿输出文件
+    std::string detailOutputFile;       // 新的文件，用于保存关键帧时间、路侧时间、配准初始矩阵和配准结果矩阵
 
+    // 新增两个成员变量，保存文件流，避免每次重新打开
+    std::string initialT_RoadVehicle_File;
+    std::string registrationT_RoadVehicle_File;
+    std::string smallGicpOutputFile; // 保存small Gicp配准的结果信息
 
 public:
     RoadSide() : deskewFlag(0), isWithinRoadRange(false) {
@@ -140,6 +147,46 @@ public:
         
         allocateMemory();
         resetParameters(true, true); // 清理路侧和车载信息
+
+        registrationT_NVehicle_OutputFile = saveFileBasePath + "registrationT_NVehicle_OutputFile.txt";
+        {
+            // 清空文件（如果存在则覆盖）
+            std::ofstream ofs(registrationT_NVehicle_OutputFile, std::ios::out | std::ios::trunc);
+            ofs.close();
+        }
+        // 同时构造保存原始车辆位姿的输出文件，并清空该文件
+        initialT_NVehicle_OutputFile = saveFileBasePath + "initialT_NVehicle_OutputFile.txt";
+        {
+            std::ofstream ofs(initialT_NVehicle_OutputFile, std::ios::out | std::ios::trunc);
+            ofs.close();
+        }
+
+        // 保存关键帧时间、路侧时间、配准初始矩阵和配准结果矩阵
+        detailOutputFile = saveFileBasePath + "registration_detail_.txt";
+        {
+            std::ofstream ofs(detailOutputFile, std::ios::out | std::ios::trunc);
+            ofs.close();
+        }
+
+        // 保存路侧Lidar和车载lidar的初始位姿
+        initialT_RoadVehicle_File = saveFileBasePath + "initialT_RoadVehicle_File.txt";
+        {
+            std::ofstream ofs(initialT_RoadVehicle_File, std::ios::out | std::ios::trunc);
+            ofs.close();
+        }
+        // 保存路侧Lidar和车载lidar的配准后的位姿
+        registrationT_RoadVehicle_File = saveFileBasePath + "registrationT_RoadVehicle_File.txt";
+        {
+            std::ofstream ofs(registrationT_RoadVehicle_File, std::ios::out | std::ios::trunc);
+            ofs.close();
+        }
+
+        // 保存路侧Lidar和车载lidar的配准后的位姿
+        smallGicpOutputFile = saveFileBasePath + "smallGicpOutputFile.txt";
+        {
+            std::ofstream ofs(smallGicpOutputFile, std::ios::out | std::ios::trunc);
+            ofs.close();
+        }
     }
 
 
@@ -222,12 +269,144 @@ public:
         T_GNSSN_HDMapN(2,3) = enu[2];
 
         T_GNSSN_Road = T_GNSSN_HDMapN * T_HDMapN_Road;
-        Eigen::Vector3d T_GNSSN_Road_Trans = T_GNSSN_Road.block<3, 1>(0, 3);
+        Eigen::IOFormat fmt(6, 0, " ", "\n", "", "");
+        ROS_INFO_STREAM("T_GNSSN_Road:\n" << T_GNSSN_Road.format(fmt));        Eigen::Vector3d T_GNSSN_Road_Trans = T_GNSSN_Road.block<3, 1>(0, 3);
         pose3DRoadSide.getVector3fMap() = T_GNSSN_Road_Trans.cast<float>();
         return true;
     }
 
+    // 将传入的车辆位姿以 TUM 格式存储到 registrationT_NVehicle_OutputFile 中，格式：时间 x y z qx qy qz qw
+    void savePoseTUM(double keyFrameTime, const Eigen::Matrix4d& T_GNSSN_Vehicle) {
+        std::ofstream ofs(registrationT_NVehicle_OutputFile, std::ios::app);
+        if (ofs.is_open()) {
+            Eigen::Vector3d trans = T_GNSSN_Vehicle.block<3,1>(0,3);
+            Eigen::Matrix3d rot = T_GNSSN_Vehicle.block<3,3>(0,0);
+            Eigen::Quaterniond q(rot);
+            ofs << std::fixed << std::setprecision(6)
+                << keyFrameTime << " " 
+                << trans.x() << " " << trans.y() << " " << trans.z() << " "
+                << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+            ofs.close();
+        } else {
+            ROS_ERROR_STREAM("Failed to open file: " << registrationT_NVehicle_OutputFile);
+        }
+    }
+
+    // 将传入的原始车辆位姿以 TUM 格式存储到 initialT_NVehicle_OutputFile 中
+    void saveInitPoseTUM(double keyFrameTime, const Eigen::Matrix4d& initT_GNSSN_Vehicle) {
+        std::ofstream ofs(initialT_NVehicle_OutputFile, std::ios::app);
+        if (ofs.is_open()) {
+            Eigen::Vector3d trans = initT_GNSSN_Vehicle.block<3,1>(0,3);
+            Eigen::Matrix3d rot = initT_GNSSN_Vehicle.block<3,3>(0,0);
+            Eigen::Quaterniond q(rot);
+            ofs << std::fixed << std::setprecision(6)
+                << keyFrameTime << " " 
+                << trans.x() << " " << trans.y() << " " << trans.z() << " "
+                << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+            ofs.close();
+        } else {
+            ROS_ERROR_STREAM("Failed to open file: " << initialT_NVehicle_OutputFile);
+        }
+    }
+
+    void saveSmallGicpResult(double keyFrameTime, const small_gicp::RegistrationResult &result) {
+        // 函数局部静态变量，记录输出的关键帧次数
+        static int keyframeCount = 0;
+        keyframeCount++;
+        std::ofstream ofs(smallGicpOutputFile, std::ios::app);
+        if (ofs.is_open()) {
+            ofs << std::fixed << std::setprecision(6)
+                << "keyFrameCount: " << keyframeCount << "\n"
+                << "keyFrameTime: " << keyFrameTime << "\n"
+                << "T_target_source \n" << result.T_target_source.matrix() << "\n"
+                << "converged: " << result.converged << "\n"
+                << "error: " << result.error << "\n"
+                << "iterations: " << result.iterations << "\n"
+                << "num_inliers: " << result.num_inliers << "\n"
+                << "------------------------------------\n";
+            ofs.close();
+        } else {
+            ROS_ERROR_STREAM("Failed to open file: " << smallGicpOutputFile);
+        }
+    }
+
+        // 封装保存车载点云和路侧点云的过程
+    void saveDebugPointClouds(double keyFrameTime, double roadCloudTime, const pcl::PointCloud<PointType>::Ptr &vehicleCloudRawDS,
+                const pcl::PointCloud<PointXYZIRT>::Ptr &curSyncedRoadCloud) {                    
+        std::ostringstream ss;
+        ss << "/home/zhao/Data/tunnelData/data_2025220163953/PCD/"
+        << std::fixed << std::setprecision(4) << keyFrameTime << "_VehicleleCloud.pcd";
+        std::string filename = ss.str();
+        pcl::io::savePCDFileBinary(filename, *vehicleCloudRawDS);
+        ROS_INFO_STREAM("Saved vehicleCloudRawDS to " << filename << " with "
+                << vehicleCloudRawDS->points.size() << " points.");
+
+        std::ostringstream ss2;
+        ss2 << "/home/zhao/Data/tunnelData/data_2025220163953/PCD/"
+        << std::fixed << std::setprecision(4) << roadCloudTime << "_roadSide.pcd";
+        std::string filename2 = ss2.str();
+        pcl::io::savePCDFileBinary(filename2, *curSyncedRoadCloud);
+        ROS_INFO_STREAM("Saved roadSide point cloud to " << filename2 << " with "
+                << curSyncedRoadCloud->points.size() << " points.");
+    }
+
+    // 新函数：将初始位姿和转换后的车辆位姿分别保存到两个文件中，格式为时间 x y z qx qy qz qw
+    void saveBothPoses(double keyFrameTime, 
+                       const Eigen::Matrix4d &initT_Road_Vehicle, 
+                       const Eigen::Matrix4d &T_Road_Vehicle) {
+        // 保存初始位姿到 initialT_RoadVehicle_File
+        {
+            std::ofstream ofs(initialT_RoadVehicle_File, std::ios::app);
+            if (ofs.is_open()) {
+                Eigen::Vector3d trans = initT_Road_Vehicle.block<3,1>(0,3);
+                Eigen::Matrix3d rot = initT_Road_Vehicle.block<3,3>(0,0);
+                Eigen::Quaterniond q(rot);
+                ofs << std::fixed << std::setprecision(6)
+                    << keyFrameTime << " " 
+                    << trans.x() << " " << trans.y() << " " << trans.z() << " "
+                    << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+                ofs.close();
+            } else {
+                ROS_ERROR_STREAM("Failed to open file: " << initialT_RoadVehicle_File);
+            }
+        }
+
+        // 保存转换后的位姿到 registrationT_RoadVehicle_File
+        {
+            std::ofstream ofs(registrationT_RoadVehicle_File, std::ios::app);
+            if (ofs.is_open()) {
+                Eigen::Vector3d trans = T_Road_Vehicle.block<3,1>(0,3);
+                Eigen::Matrix3d rot = T_Road_Vehicle.block<3,3>(0,0);
+                Eigen::Quaterniond q(rot);
+                ofs << std::fixed << std::setprecision(6)
+                    << keyFrameTime << " " 
+                    << trans.x() << " " << trans.y() << " " << trans.z() << " "
+                    << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << "\n";
+                ofs.close();
+            } else {
+                ROS_ERROR_STREAM("Failed to open file: " << registrationT_RoadVehicle_File);
+            }
+        }
+    }
+
+    bool checkRegistrationConvergence(const small_gicp::RegistrationResult &result) {
+        ROS_INFO_STREAM("=== Registration Result Details ===");
+        ROS_INFO_STREAM("T_target_source:\n" << result.T_target_source.matrix());
+        ROS_INFO_STREAM("converged: " << result.converged);
+        ROS_INFO_STREAM("error: " << result.error);
+        ROS_INFO_STREAM("iterations: " << result.iterations);
+        ROS_INFO_STREAM("num_inliers: " << result.num_inliers);
+        ROS_INFO_STREAM("--- H ---\n" << result.H);
+        ROS_INFO_STREAM("--- b ---\n" << result.b.transpose());
+        
+        // converged为1时，表示收敛
+        return (result.converged == true);
+    }
+
     void VehicleInfoHandler(const lio_sam_6axis::cloud_infoConstPtr &msgIn) {
+        if (!useRoadSide) {
+            return;
+        }
 
         // 更改路侧lidar的n系的原点位置，因为gnss的n系位置是第一个时刻的gnss的位置对应的n系
         static bool hasChangedNframe = false;
@@ -241,7 +420,7 @@ public:
                 return;
             }
         }
-        
+
         static int addRoadNum = 0;
         ros::WallTime procStart = ros::WallTime::now();
         timeOptmizationStamp = msgIn->header.stamp;        // extract time stamp
@@ -288,28 +467,6 @@ public:
         vehicleOptmCloudInfo = *msgIn;
         pcl::fromROSMsg(msgIn->cloud_deskewed, *vehicleCloudRawDS);  // 当前关键帧经过去畸变的点云
         pcl::fromROSMsg(msgIn->key_frame_cloud, *vehicleCloudCornerSurfDS);  // 当前关键帧的角点和面点组成的点云
-        // 保存点云部分（在 debugRoadSide 为 true 时执行）
-        if (debugRoadSide) {
-            ROS_INFO_STREAM("[Point] Deskewed cloud size: " << vehicleCloudRawDS->points.size() 
-                                << " | Corner & surf point cloud size: " << vehicleCloudCornerSurfDS->points.size());
-            // 保存车载点云，文件名格式：<keyFrameTime>_VehicleleCloud.pcd
-            std::ostringstream ss;
-            ss << "/home/zhao/Data/tunnelData/data_2025220163953/PCD/"
-            << std::fixed << std::setprecision(4) << keyFrameTime << "_VehicleleCloud.pcd";
-            std::string filename = ss.str();
-            pcl::io::savePCDFileBinary(filename, *vehicleCloudRawDS);
-            ROS_INFO_STREAM("Saved vehicleCloudRawDS to " << filename << " with "
-                                << vehicleCloudRawDS->points.size() << " points.");
-
-            // 保存路侧点云，文件名格式：<roadCloudTime>_roadSide.pcd
-            std::ostringstream ss2;
-            ss2 << "/home/zhao/Data/tunnelData/data_2025220163953/PCD/"
-                << std::fixed << std::setprecision(4) << roadCloudTime << "_roadSide.pcd";
-            std::string filename2 = ss2.str();
-            pcl::io::savePCDFileBinary(filename2, *curSyncedRoadCloud);
-            ROS_INFO_STREAM("Saved roadSide point cloud to " << filename2 << " with " 
-                                << curSyncedRoadCloud->points.size() << " points.");
-        }
         auto curRoadEigenPoints = ConvertCloudToEigenVector4f<PointXYZIRT>(curSyncedRoadCloud); // 目标点云
         auto vehicleEigenPoints = ConvertCloudToEigenVector4f<PointType>(vehicleCloudCornerSurfDS); // 源点云
 
@@ -323,15 +480,29 @@ public:
         Eigen::Matrix4d T_Road_GNSSN = T_GNSSN_Road.inverse();  // n frame to roadLidar frame
         Eigen::Matrix4d initT_Road_Vehicle = T_Road_GNSSN * initT_GNSSN_Vehicle;  // vehicle frame to roadLidar frame 初始变换矩阵
         // 调用配准函数
-        Eigen::Matrix4d T_Road_Vehicle = CloudRegistrationGicp(curRoadEigenPoints, vehicleEigenPoints, initT_Road_Vehicle, roadCloudDs);
+        small_gicp::RegistrationResult result = CloudRegistrationGicp(curRoadEigenPoints, vehicleEigenPoints, initT_Road_Vehicle, roadCloudDs);
+        if (!checkRegistrationConvergence(result)) {
+            ROS_WARN_STREAM("CloudRegistration has NOT converged! Iterations: " << result.iterations);
+            return;
+        }
+        Eigen::Matrix4d T_Road_Vehicle = result.T_target_source.matrix();  // 配准后的变换矩阵
         if (!T_Road_Vehicle.allFinite()) {
             std::cerr << "CloudRegistration has WRONG result!" << std::endl;
+        }
+        // 保存点云部分（在 debugRoadSide 为 true 时执行）
+        if (debugRoadSide) {
+            saveDebugPointClouds(keyFrameTime, roadCloudTime, vehicleCloudRawDS, curSyncedRoadCloud);
         }
         Eigen::Matrix4d T_GNSSN_Vehicle = T_GNSSN_Road * T_Road_Vehicle;
         StoreRegistrationResult(keyFrameID, timeOptmizationCur, T_GNSSN_Vehicle);  // 存储配准结果
         PublishRegistration();
 
         if (debugRoadSide) {
+            saveInitPoseTUM(keyFrameTime, initT_GNSSN_Vehicle);
+            savePoseTUM(keyFrameTime, T_GNSSN_Vehicle);  // 保存配准结果
+            saveBothPoses(keyFrameTime, initT_Road_Vehicle, T_Road_Vehicle); // 保存初始位姿和转换后的位姿
+            saveSmallGicpResult(keyFrameTime, result); // 保存配准结果
+            // saveRegistrationDetail(keyFrameTime, roadCloudTime, initT_Road_Vehicle, T_Road_Vehicle);
             ros::WallDuration procTime = ros::WallTime::now() - procStart;
             double deltaCurrToOpt = timeRoadCurrent - timeOptmizationCur;
             ROS_INFO_STREAM("[Time] RoadCurrent=" << std::fixed << std::setprecision(4) << timeRoadCurrent << " s | "
@@ -562,7 +733,7 @@ int main(int argc, char **argv) {
 
     ROS_INFO("\033[1;32m----> RoadSide LiDAR Started.\033[0m");
 
-    ros::MultiThreadedSpinner spinner(36);
+    ros::MultiThreadedSpinner spinner(10);
     spinner.spin();
 
     return 0;

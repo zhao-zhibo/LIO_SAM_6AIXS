@@ -15,11 +15,11 @@ if __name__ == '__main__':
     time.sleep(3) # 等待一段时间，确保前面的命令已经启动
     # 第一次采集数据的rosbag包，和郭紫祎一起采集的数据，硃山路隧道，春节前采集的
     # # rosbag_process = run_command("rosbag play /media/zhao/ZhaoZhibo1T/AllData/tunnelRoadside/data_2025220163953/AfterPreProcess/mergeVehicleRoad_withGNSS.bag\
-    # #                              -r 3  -s 450")
+    # #                              -r 3  -s 490")
 
     # 第二次采集数据的rosbag包，和许思，袁诗睿一起采集的数据
     # rosbag_process = run_command("rosbag play /media/zhao/ZhaoZhibo1T/AllData/tunnelRoadside/data_2025220163953/AfterPreProcess/AfterPreProcess_mems.bag\
-    #                               -r 3 -s 450 ")
+    #                               -r 3 -s 490 ")
 
     # # # 播放开源数据集中街道口隧道的包
     # # 启动 GREAT_oursdata_mems.launch
