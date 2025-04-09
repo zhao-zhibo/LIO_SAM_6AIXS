@@ -69,7 +69,7 @@ struct GaussNewtonOptimizer {
 
 /// @brief LevenbergMarquardt optimizer
 struct LevenbergMarquardtOptimizer {
-  LevenbergMarquardtOptimizer() : verbose(false), max_iterations(20), max_inner_iterations(10), init_lambda(1e-3), lambda_factor(10.0) {}
+  LevenbergMarquardtOptimizer() : verbose(true), max_iterations(50), max_inner_iterations(10), init_lambda(1e-3), lambda_factor(10.0) {}
 
   template <
     typename TargetPointCloud,

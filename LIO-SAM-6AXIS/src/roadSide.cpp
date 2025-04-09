@@ -127,6 +127,8 @@ private:
     std::string registrationT_NVehicle_OutputFile; // 点云配准的输出文件
     std::string initialT_NVehicle_OutputFile;      // 原始车辆位姿输出文件
     std::string detailOutputFile;       // 新的文件，用于保存关键帧时间、路侧时间、配准初始矩阵和配准结果矩阵
+    int addRoadNum = 0;
+    int nonConvergenceCount = 0; // 记录配准不收敛的次数
 
     // 新增两个成员变量，保存文件流，避免每次重新打开
     std::string initialT_RoadVehicle_File;
@@ -421,7 +423,6 @@ public:
             }
         }
 
-        static int addRoadNum = 0;
         ros::WallTime procStart = ros::WallTime::now();
         timeOptmizationStamp = msgIn->header.stamp;        // extract time stamp
         timeOptmizationCur = msgIn->header.stamp.toSec();
@@ -482,8 +483,8 @@ public:
         // 调用配准函数
         small_gicp::RegistrationResult result = CloudRegistrationGicp(curRoadEigenPoints, vehicleEigenPoints, initT_Road_Vehicle, roadCloudDs);
         if (!checkRegistrationConvergence(result)) {
+            nonConvergenceCount ++;
             ROS_WARN_STREAM("CloudRegistration has NOT converged! Iterations: " << result.iterations);
-            return;
         }
         Eigen::Matrix4d T_Road_Vehicle = result.T_target_source.matrix();  // 配准后的变换矩阵
         if (!T_Road_Vehicle.allFinite()) {
@@ -496,6 +497,7 @@ public:
         Eigen::Matrix4d T_GNSSN_Vehicle = T_GNSSN_Road * T_Road_Vehicle;
         StoreRegistrationResult(keyFrameID, timeOptmizationCur, T_GNSSN_Vehicle);  // 存储配准结果
         PublishRegistration();
+        addRoadNum ++;
 
         if (debugRoadSide) {
             saveInitPoseTUM(keyFrameTime, initT_GNSSN_Vehicle);
@@ -509,6 +511,7 @@ public:
                 << "OptCur=" << std::fixed << std::setprecision(4) << timeOptmizationCur << " s | "
                 << "Delta=" << std::fixed << std::setprecision(6) << abs(timeRoadCurrent - timeOptmizationCur) << " s | "
                 << "Processing=" << std::fixed << std::setprecision(6) << procTime.toSec() << " sec");
+            ROS_INFO_STREAM("[Debug] Total addRoadNum: " << addRoadNum << " | nonConvergenceCount: " << nonConvergenceCount);
         }
     }
 
@@ -578,28 +581,28 @@ public:
                 // 打印队列数量
                 ROS_INFO_STREAM("[RoadCloudQueue size]: " << roadCloudQueue.size() << " | hasSynced: " << hasSynced 
                                 << " | keyframeTimestamp: " << std::fixed << std::setprecision(5) << keyframeTimestamp);
-                std::ostringstream oss;
-                oss << "[RoadCloudQueue timestamps]: ";
-                // 打印队头三个话题时间戳
-                int headCount = 0;
-                for (auto it = roadCloudQueue.begin(); it != roadCloudQueue.end() && headCount < 2; ++it, ++headCount) {
-                    oss << "[head " << headCount << "]: " 
-                        << std::fixed << std::setprecision(6) << it->header.stamp.toSec();
-                    if (headCount < 2) {
-                        oss << " | ";
-                    }
-                }
-                oss << " || "; // 分隔线
-                // 打印队尾三个话题时间戳
-                int tailCount = 0;
-                for (auto it = roadCloudQueue.rbegin(); it != roadCloudQueue.rend() && tailCount < 2; ++it, ++tailCount) {
-                    oss << "[tail " << tailCount << "]: " 
-                        << std::fixed << std::setprecision(6) << it->header.stamp.toSec();
-                    if (tailCount < 2) {
-                        oss << " | ";
-                    }
-                }
-                ROS_INFO_STREAM(oss.str());
+                // std::ostringstream oss;
+                // oss << "[RoadCloudQueue timestamps]: ";
+                // // 打印队头三个话题时间戳
+                // int headCount = 0;
+                // for (auto it = roadCloudQueue.begin(); it != roadCloudQueue.end() && headCount < 2; ++it, ++headCount) {
+                //     oss << "[head " << headCount << "]: " 
+                //         << std::fixed << std::setprecision(6) << it->header.stamp.toSec();
+                //     if (headCount < 2) {
+                //         oss << " | ";
+                //     }
+                // }
+                // oss << " || "; // 分隔线
+                // // 打印队尾三个话题时间戳
+                // int tailCount = 0;
+                // for (auto it = roadCloudQueue.rbegin(); it != roadCloudQueue.rend() && tailCount < 2; ++it, ++tailCount) {
+                //     oss << "[tail " << tailCount << "]: " 
+                //         << std::fixed << std::setprecision(6) << it->header.stamp.toSec();
+                //     if (tailCount < 2) {
+                //         oss << " | ";
+                //     }
+                // }
+                // ROS_INFO_STREAM(oss.str());
             }
 
         }

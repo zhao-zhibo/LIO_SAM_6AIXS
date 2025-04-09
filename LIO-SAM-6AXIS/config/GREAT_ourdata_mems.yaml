@@ -16,7 +16,7 @@ lio_sam_6axis:
   mapFrame: "map"
 
   # GPS Settings
-  useGPS: true
+  useGPS: false
   updateOrigin: true                          # when you can not get a reliable gps origin points(RTK fixed)
   gpsFrequence: 10                            # set proper gps frequence to align gps and lidar timestamp
   useImuHeadingInitialization: true         # if using GPS data, set to "false"  不用gps时为true，初始航向角不会置为0了，从cloudInfo.imuYawInit中获取
@@ -52,9 +52,9 @@ lio_sam_6axis:
   imuAccelerIsG: false
 
   # RoadSide Settings
-  useRoadSide: true  # 当useRoadSide置为true时，后端才会考虑加入路侧lidar的约束
-  debugRoadSide: true
-  saveFileBasePath: "/home/zhao/Data/tunnelData/data_2025220163953/OutputFile/"
+  useRoadSide: false  # 当useRoadSide置为true时，后端才会考虑加入路侧lidar的约束
+  debugRoadSide: false
+  saveFileBasePath: "/home/zhao/Data/tunnelData/data_2025220163953/OutputFile_Temp/"
   uesInitialVehiclePose: false   # 确定是否要用初始位置进行初始化，车辆的初始位置是从IE的ros服务中获取的
   debugInitialVehiclePose: false # 当使用初始位置时，打印对应的日志 调试关键帧信息
 

@@ -18,9 +18,11 @@ if __name__ == '__main__':
     # #                              -r 3  -s 490")
 
     # 第二次采集数据的rosbag包，和许思，袁诗睿一起采集的数据
-    # rosbag_process = run_command("rosbag play /media/zhao/ZhaoZhibo1T/AllData/tunnelRoadside/data_2025220163953/AfterPreProcess/AfterPreProcess_mems.bag\
-    #                               -r 3 -s 490 ")
+    # 下面是从刚开始的位置进行播包
+    # rosbag_process = run_command("rosbag play /media/zhao/ZhaoZhibo1T/AllData/tunnelRoadside/data_2025220163953/AfterPreProcess/AfterPreProcess_mems.bag -r 3 -s 490 ")
 
+    # 下面是从中间位置进行播包
+    # rosbag_process = run_command("rosbag play /media/zhao/ZhaoZhibo1T/AllData/tunnelRoadside/data_2025220163953/AfterPreProcess/AfterPreProcess_mems.bag -r 3 -s 600 ")
     # # # 播放开源数据集中街道口隧道的包
     # # 启动 GREAT_oursdata_mems.launch
     # launch_process = run_command("roslaunch lio_sam_6axis GREAT_urban02.launch")
