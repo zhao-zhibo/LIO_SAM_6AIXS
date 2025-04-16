@@ -3,6 +3,7 @@
 //
 
 #include "dataSaver.h"
+#include "utility.h"
 
 DataSaver::DataSaver() {}
 
@@ -145,6 +146,27 @@ void DataSaver::saveOdometryVerticesTUM(
                << odometry.pose.pose.orientation.y << " "
                << odometry.pose.pose.orientation.z << " "
                << odometry.pose.pose.orientation.w << std::endl;
+    }
+}
+
+void DataSaver::saveOdometrycloudKeyPoses6DTUM(pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D) {
+    std::fstream stream(save_directory + "cloudPose6D_odom_tum.txt", std::fstream::out);
+    stream.precision(15);
+    for (int i = 0; i < cloudKeyPoses6D -> size(); i++) {
+        nav_msgs::Odometry odometryROS;
+        float transform[6] = {cloudKeyPoses6D->points[i].roll, cloudKeyPoses6D->points[i].pitch, cloudKeyPoses6D->points[i].yaw,
+                              cloudKeyPoses6D->points[i].x, cloudKeyPoses6D->points[i].y, cloudKeyPoses6D->points[i].z};
+        ParamServer param;
+        param.transformEiegn2Odom(cloudKeyPoses6D->points[i].time, odometryROS, transform);
+        double time = odometryROS.header.stamp.toSec();
+        // check the size of keyframeTimes
+        stream << time << " " << odometryROS.pose.pose.position.x << " "
+            << odometryROS.pose.pose.position.y << " "
+            << odometryROS.pose.pose.position.z << " "
+            << odometryROS.pose.pose.orientation.x << " "
+            << odometryROS.pose.pose.orientation.y << " "
+            << odometryROS.pose.pose.orientation.z << " "
+            << odometryROS.pose.pose.orientation.w << std::endl;
     }
 }
 

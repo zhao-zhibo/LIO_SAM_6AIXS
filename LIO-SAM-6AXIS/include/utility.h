@@ -72,6 +72,7 @@ public:
 
     //Topics
     string pointCloudTopic;
+    string roadSidePointTopic;
     string imuTopic;
     string odomTopic;
     string gpsTopic;
@@ -87,6 +88,9 @@ public:
     // GPS Settings
     int gpsFrequence;
     bool useGPS;
+    bool useRoadSide;
+    bool uesInitialVehiclePose;
+    bool debugInitialVehiclePose;
     bool updateOrigin;
     bool useImuHeadingInitialization;
     bool useGpsElevation;
@@ -104,6 +108,7 @@ public:
     // Save pcd
     bool savePCD;
     string savePCDDirectory;
+    string saveFileBasePath;
     string sequence;
     string saveDirectory;
     string configDirectory;
@@ -144,6 +149,18 @@ public:
     Eigen::Vector3d t_sensor_body;
     Eigen::Quaterniond q_body_sensor;
     Eigen::Vector3d t_body_sensor;
+
+    // 路侧lidar在n系下的位置和姿态
+    vector<double> T_nRoadLidarV;
+    Eigen::Matrix4d T_HDMapN_Road; // 路侧lidar到高精度地图n系的4乘4的变换矩阵，不过还没确定是不是到enu坐标系的转换
+    Eigen::Matrix3d T_nRoad_Roat; // 旋转矩阵
+    float rangeRoadVehicleThr; // 路侧lidar和车辆的距离阈值
+    float roadTranslationErrorThreshold;
+    float roadRotationErrorThreshold;
+    float toleranceTime;
+    bool debugRoadSide;
+    double roadCloudDs;
+    SensorType roadSensor;
 
     // LOAM
     float edgeThreshold; // 边缘点曲率的阈值
@@ -189,6 +206,7 @@ public:
         nh.param<std::string>("/robot_id", robot_id, "roboat");
 
         nh.param<std::string>("lio_sam_6axis/pointCloudTopic", pointCloudTopic, "points_raw");
+        nh.param<std::string>("lio_sam_6axis/roadSidePointTopic", roadSidePointTopic, "roadSidepoints");
         nh.param<std::string>("lio_sam_6axis/imuTopic", imuTopic, "imu_correct");
         nh.param<std::string>("lio_sam_6axis/odomTopic", odomTopic, "odometry/imu");
         nh.param<std::string>("lio_sam_6axis/gpsTopic", gpsTopic, "fix");
@@ -213,6 +231,34 @@ public:
         nh.param<bool>("lio_sam_6axis/debugGps", debugGps, false);
         nh.param<bool>("lio_sam_6axis/imuAngularIsDegree", imuAngularIsDegree, false);
         nh.param<bool>("lio_sam_6axis/imuAccelerIsG", imuAccelerIsG, false);
+
+        // 关于路侧lidar的参数配置
+        nh.param<bool>("lio_sam_6axis/useRoadSide", useRoadSide, false);
+        std::vector<double> defaultT(16, 0.0);
+        for (int i = 0; i < 4; ++i) {
+            defaultT[i*5] = 1.0;  // 对角线赋值为1
+        }
+        nh.param<vector<double >>("lio_sam_6axis/T_nRoadLidar", T_nRoadLidarV, defaultT);
+        T_HDMapN_Road = Eigen::Map<const Eigen::Matrix<double, -1, -1, Eigen::RowMajor>>(T_nRoadLidarV.data(), 4, 4);
+        T_nRoad_Roat = T_HDMapN_Road.block<3, 3>(0, 0);
+        nh.param<float>("lio_sam_6axis/rangeRoadVehicleThr", rangeRoadVehicleThr, 50);
+        nh.param<float>("lio_sam_6axis/roadtranslationErrorThreshold", roadTranslationErrorThreshold, 1);
+        nh.param<float>("lio_sam_6axis/roadRotationErrorThreshold", roadRotationErrorThreshold, 5.0);
+        nh.param<float>("lio_sam_6axis/toleranceTime", toleranceTime, 0.1);
+        nh.param<bool>("lio_sam_6axis/debugRoadSide", debugRoadSide, false);
+        std::string roadSensorStr;
+        nh.param<std::string>("lio_sam_6axis/roadSensor", roadSensorStr, "ouster");
+        nh.param<double>("lio_sam_6axis/roadCloudDs", roadCloudDs, 0.25);
+        nh.param<std::string>("lio_sam_6axis/saveFileBasePath", saveFileBasePath, "/Downloads/LOAM/");
+        if (roadSensorStr == "velodyne") {
+            roadSensor = SensorType::VELODYNE;
+        } else {
+            ROS_ERROR_STREAM("Invalid roadSensor type (must be either 'velodyne' or 'ouster' or 'livox'): " << roadSensorStr);
+            ros::shutdown();
+        }
+        nh.param<bool>("lio_sam_6axis/uesInitialVehiclePose", uesInitialVehiclePose, false);
+        nh.param<bool>("lio_sam_6axis/debugInitialVehiclePose", debugInitialVehiclePose, false);
+
 
         nh.param<bool>("lio_sam_6axis/savePCD", savePCD, false);
         nh.param<std::string>("lio_sam_6axis/savePCDDirectory", savePCDDirectory, "/Downloads/LOAM/");
@@ -374,8 +420,22 @@ public:
         return imu_out;
     }
 
-};
+    // 将transform转换成laserOdometryROS
+    void transformEiegn2Odom(double timestamp,
+        nav_msgs::Odometry &laserOdometryROS,
+        float transform[6]) {
+        laserOdometryROS.header.stamp = ros::Time().fromSec(timestamp);
+        laserOdometryROS.header.frame_id = odometryFrame;
+        laserOdometryROS.child_frame_id = "odom_mapping";
+        laserOdometryROS.pose.pose.position.x = transform[3];
+        laserOdometryROS.pose.pose.position.y = transform[4];
+        laserOdometryROS.pose.pose.position.z = transform[5];
+        laserOdometryROS.pose.pose.orientation =
+        tf::createQuaternionMsgFromRollPitchYaw(transform[0], transform[1],
+                                        transform[2]);
+    }
 
+};
 
 template<typename T>
 sensor_msgs::PointCloud2 publishCloud(const ros::Publisher &thisPub,
@@ -422,11 +482,11 @@ void imuRPY2rosRPY(sensor_msgs::Imu *thisImuMsg, T *rosRoll, T *rosPitch, T *ros
     *rosYaw = imuYaw;
 }
 
-float pointDistance(PointType p) {
+inline float pointDistance(PointType p) {
     return sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
 }
 
-float pointDistance(PointType p1, PointType p2) {
+inline float pointDistance(PointType p1, PointType p2) {
     return sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z));
 }
 
