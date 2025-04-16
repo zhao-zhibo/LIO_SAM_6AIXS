@@ -232,6 +232,7 @@ struct MyCorrespondenceRejector {
 
 /// @brief Custom general factor that can control the registration process.
 struct MyGeneralFactor {
+  // ​​功能​​：初始化正则化参数lambda为1e8。
   MyGeneralFactor() : lambda(1e8) {}
 
   /// @brief Update linearized system.
@@ -253,12 +254,16 @@ struct MyGeneralFactor {
     Eigen::Matrix<double, 6, 6>* H,
     Eigen::Matrix<double, 6, 1>* b,
     double* e) const {
+
     // Optimization DoF mask [rx, ry, rz, tx, ty, tz] (1.0 = inactive, 0.0 = active)
-    Eigen::Matrix<double, 6, 1> dof_mask;
-    dof_mask << 1.0, 1.0, 0.0, 0.0, 0.0, 0.0;
+    // 自由度掩码：1.0表示固定该自由度，0.0表示允许优化
+    Eigen::Matrix<double, 6, 1> dof_mask; // 对应[rx, ry, rz, tx, ty, tz]六个自由度
+    dof_mask << 0.0, 0.0, 0.0, 0.0, 0.0, 0.0; // 固定绕X轴(roll)和Y轴(pitch)旋转 Z轴是yaw，不增加它的惩罚
 
     // Fix roll and pitch rotation by adding a large penalty (soft contraint)
-    (*H) += dof_mask.asDiagonal() * lambda;
+    (*H) += dof_mask.asDiagonal() * lambda;  // 仅在rx,ry对应的H对角元素增加λ，抑制其变化
+    // 数学等效：在目标函数中增加正则项 0.5*λ*(Δrx² + Δry²)
+ 
   }
 
   /// @brief Update error consisting of per-point factors.
@@ -273,6 +278,7 @@ struct MyGeneralFactor {
     // No update is required for the error.
   }
 
+  ///< 正则化系数（λ越大约束越强，建议范围1e6~1e12）  物理意义：惩罚项系数，λ→∞时变为硬约束
   double lambda;  ///< Regularization parameter (Increasing this makes the constraint stronger)
 };
 

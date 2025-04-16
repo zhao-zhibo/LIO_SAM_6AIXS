@@ -43,12 +43,15 @@ struct GaussNewtonOptimizer {
       general_factor.update_linearized_system(target, source, target_tree, result.T_target_source, &H, &b, &e);
 
       // Solve linear system
+      // 公式：(H + λI)Δ = -b (Levenberg-Marquardt)，添加阻尼项λI
       const Eigen::Matrix<double, 6, 1> delta = (H + lambda * Eigen ::Matrix<double, 6, 6>::Identity()).ldlt().solve(-b);
 
+      // 输出迭代信息，当前误差值e, 增量值delta, 阻尼项λ,dt为平移增量范数，dr为旋转增量范数
       if (verbose) {
         std::cout << "iter=" << i << " e=" << e << " lambda=" << lambda << " dt=" << delta.tail<3>().norm() << " dr=" << delta.head<3>().norm() << std::endl;
       }
 
+      // 收敛性判断 (公式：||Δ|| < ε)
       result.converged = criteria.converged(delta);
       result.T_target_source = result.T_target_source * se3_exp(delta);
       result.iterations = i;
@@ -57,6 +60,7 @@ struct GaussNewtonOptimizer {
       result.error = e;
     }
 
+    // 计算内点数量 (公式：N_inlier = Σ[ r_i < threshold ])
     result.num_inliers = std::count_if(factors.begin(), factors.end(), [](const auto& factor) { return factor.inlier(); });
 
     return result;
@@ -66,6 +70,74 @@ struct GaussNewtonOptimizer {
   int max_iterations;  ///< Max number of optimization iterations
   double lambda;       ///< Damping factor (Increasing this makes optimization slow but stable)
 };
+
+
+//// @brief 修改后的高斯牛顿方法，带有退化概率的优化器
+struct GaussNewtonOptimizerProbabilities {
+  GaussNewtonOptimizerProbabilities() : verbose(true), max_iterations(50), lambda(1e-6) {}
+
+  template <
+    typename TargetPointCloud,
+    typename SourcePointCloud,
+    typename TargetTree,
+    typename CorrespondenceRejector,
+    typename TerminationCriteria,
+    typename Reduction,
+    typename Factor,
+    typename GeneralFactor>
+  RegistrationResult optimize(
+    const TargetPointCloud& target,
+    const SourcePointCloud& source,
+    const TargetTree& target_tree,
+    const CorrespondenceRejector& rejector,
+    const TerminationCriteria& criteria,
+    Reduction& reduction,
+    const Eigen::Isometry3d& init_T,
+    std::vector<Factor>& factors,
+    GeneralFactor& general_factor) const {
+
+    if (verbose) {
+      std::cout << "--- GN_Probabilities optimization ---" << std::endl;
+    }
+
+    RegistrationResult result(init_T);
+    for (int i = 0; i < max_iterations && !result.converged; i++) {
+      // Linearize 线性化
+      auto [H, b, e] = reduction.linearize(target, source, target_tree, rejector, result.T_target_source, factors);
+      general_factor.update_linearized_system(target, source, target_tree, result.T_target_source, &H, &b, &e);
+
+      // Solve linear system
+      // 公式：(H + λI)Δ = -b (Levenberg-Marquardt)，添加阻尼项λI
+      const Eigen::Matrix<double, 6, 1> delta = (H + lambda * Eigen ::Matrix<double, 6, 6>::Identity()).ldlt().solve(-b);
+
+      // 输出迭代信息，当前误差值e, 增量值delta, 阻尼项λ,dt为平移增量范数，dr为旋转增量范数
+      if (verbose) {
+        std::cout << "iter=" << i << " e=" << e << " lambda=" << lambda << " dt=" << delta.tail<3>().norm() << " dr=" << delta.head<3>().norm() << std::endl;
+      }
+
+      // 收敛性判断 (公式：||Δ|| < ε)
+      result.converged = criteria.converged(delta);
+      result.T_target_source = result.T_target_source * se3_exp(delta);
+      result.iterations = i;
+      result.H = H;
+      result.b = b;
+      result.error = e;
+    }
+
+    // 计算内点数量 (公式：N_inlier = Σ[ r_i < threshold ])
+    result.num_inliers = std::count_if(factors.begin(), factors.end(), [](const auto& factor) { return factor.inlier(); });
+
+    return result;
+  }
+
+  bool verbose;        ///< If true, print debug messages
+  int max_iterations;  ///< Max number of optimization iterations
+  double lambda;       ///< Damping factor (Increasing this makes optimization slow but stable)
+};
+
+
+
+
 
 /// @brief LevenbergMarquardt optimizer
 struct LevenbergMarquardtOptimizer {
